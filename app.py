@@ -51,7 +51,7 @@ def save_tokens(df):
     df.to_csv(TOKENS_FILE, index=False)
 
 def normalize_name(name: str) -> str:
-    """Case-insensitive duplicate prevention for names."""
+    """Normalize names to prevent duplicates (case-insensitive + trim spaces)."""
     return re.sub(r"\s+", " ", name.strip()).lower()
 
 def get_device_id():
@@ -80,21 +80,21 @@ def cleanup_old_tokens(df):
         return df
 
     now = datetime.now()
-    keep = []
+    keep_rows = []
 
     for _, row in df.iterrows():
         try:
             created = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S")
-        except:
+        except Exception:
             continue
 
         if (now - created).total_seconds() <= TOKEN_VALIDITY_SECONDS:
-            keep.append(row)
+            keep_rows.append(row)
 
-    if not keep:
+    if not keep_rows:
         return pd.DataFrame(columns=TOKEN_COLUMNS)
 
-    return pd.DataFrame(keep)
+    return pd.DataFrame(keep_rows)
 
 def create_rotating_qr(attendance_id):
     """Create a fresh QR token valid for 11 seconds."""
@@ -128,16 +128,14 @@ def is_valid_token(attendance_id, token):
     ]
     return not valid.empty
 
-def name_exists_in_session(records_df, attendance_id, name, exclude_matric=None):
-    """Check if normalized name exists in attendance session."""
+def session_name_exists(records_df, attendance_id, name, exclude_matric=None):
+    """Check if a name exists in session (case-insensitive)."""
     session_df = records_df[records_df["attendance_id"] == attendance_id].copy()
 
     if exclude_matric is not None:
         session_df = session_df[session_df["matric"] != exclude_matric]
 
     norm_target = normalize_name(name)
-
-    # Normalize existing names
     existing_norm = session_df["full_name"].fillna("").apply(normalize_name)
 
     return norm_target in existing_norm.values
@@ -192,19 +190,18 @@ def student_page():
         records = load_records()
         device_id = get_device_id()
 
-        # Check duplicates only within this attendance session
         this_session = records[records["attendance_id"] == attendance_id]
+
+        # Duplicate checks (per session)
+        if matric in this_session["matric"].values:
+            st.error("This matric number has already been recorded for this session.")
+            return
 
         if device_id in this_session["device_id"].values:
             st.error("This device has already submitted attendance for this session.")
             return
 
-        if matric in this_session["matric"].values:
-            st.error("This matric number has already been recorded for this session.")
-            return
-
-        # Name must be unique (case-insensitive) in this session
-        if name_exists_in_session(records, attendance_id, name):
+        if session_name_exists(records, attendance_id, name):
             st.error("This name has already been recorded for this session.")
             return
 
@@ -238,6 +235,8 @@ def rep_login():
     if st.button("Login"):
         if username == REP_USERNAME and password == REP_PASSWORD:
             st.session_state.rep_logged_in = True
+            st.success("Login successful")
+            st.rerun()
         else:
             st.error("Invalid login details")
 
@@ -245,7 +244,7 @@ def rep_login():
 def rep_dashboard():
     st.title("Course Rep Dashboard")
 
-    # --- Create Attendance ---
+    # -------- CREATE ATTENDANCE --------
     st.subheader("Create Attendance")
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
     title = "Daily Attendance"
@@ -274,11 +273,12 @@ def rep_dashboard():
         }
 
         save_sessions(pd.concat([sessions, pd.DataFrame([new])], ignore_index=True))
-        st.success("Attendance created")
+        st.success("Attendance created successfully.")
+        st.rerun()
 
     st.divider()
 
-    # --- Select Active Attendance ---
+    # -------- SELECT ACTIVE ATTENDANCE --------
     sessions = load_sessions()
     active = sessions[sessions["status"] == "Active"]
 
@@ -288,7 +288,7 @@ def rep_dashboard():
 
     attendance_id = st.selectbox("Active Attendance", active["attendance_id"])
 
-    # ---------------- ROTATING QR (NON-BLOCKING) ----------------
+    # -------- ROTATING QR (NON-BLOCKING) --------
     st.subheader("Live QR Code (changes every 11 seconds)")
     st.caption("Students must scan the latest QR code. Old links expire automatically.")
 
@@ -305,7 +305,7 @@ def rep_dashboard():
 
     st.image(st.session_state.current_qr_path, caption="Valid for 11 seconds")
 
-    # Auto-refresh the page every 11 seconds without blocking buttons
+    # Auto refresh every 11 seconds (does not block buttons)
     st.markdown(
         f"""
         <script>
@@ -319,13 +319,332 @@ def rep_dashboard():
 
     st.divider()
 
-    # ---------------- REP ACTIONS ----------------
-    st.subheader("Rep Actions")
+    # -------- END ATTENDANCE BUTTON --------
+    if st.button("End Attendance", type="primary"):
+        sessions = load_sessions()
+        sessions.loc[sessions["attendance_id"] == attendance_id, "status"] = "Ended"
+        save_sessions(sessions)
+        st.success("Attendance ended. QR code is now invalid.")
+        st.rerun()
 
-    col1, col2 = st.columns(2)
+    st.divider()
 
-    with col1:
-        if st.button("End Attendance", type="primary"):
+    # -------- VIEW CURRENT LIST --------
+    st.subheader("Current Attendance List (Rep View)")
+    records = load_records()
+    this_session = records[records["attendance_id"] == attendance_id].copy()
+
+    if this_session.empty:
+        st.info("No students have marked attendance yet.")
+    else:
+        st.dataframe(
+            this_session[["full_name", "matric", "time", "device_id"]],
+            use_container_width=True
+        )
+
+    st.divider()
+
+    # -------- MANUAL ADD --------
+    st.subheader("Add Student Manually (Rep Only)")
+    m_name = st.text_input("Student Full Name", key="manual_name")
+    m_matric = st.text_input("Student Matric Number (11 digits)", key="manual_matric")
+
+    if st.button("Add Student"):
+        m_name = m_name.strip()
+        m_matric = m_matric.strip()
+
+        if not m_name or not m_matric:
+            st.error("Name and matric number are required.")
+            return
+
+        if not re.fullmatch(r"\d{11}", m_matric):
+            st.error("Matric number must be exactly 11 digits.")
+            return
+
+        records = load_records()
+        this_session = records[records["attendance_id"] == attendance_id]
+
+        if m_matric in this_session["matric"].values:
+            st.error("That matric number is already recorded for this attendance.")
+            return
+
+        if session_name_exists(records, attendance_id, m_name):
+            st.error("That name is already recorded for this attendance (case-insensitive).")
+            return
+
+        new = {
+            "attendance_id": attendance_id,
+            "full_name": m_name,
+            "matric": m_matric,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "device_id": "MANUAL_REP"
+        }
+
+        save_records(pd.concat([records, pd.DataFrame([new])], ignore_index=True))
+        st.success("Student added successfully.")
+        st.rerun()
+
+    st.divider()
+
+    # -------- EDIT STUDENT --------
+    st.subheader("Edit Student (Rep Only)")
+    st.caption("Edit by entering the student's OLD matric number.")
+
+    old_matric = st.text_input("Old Matric Number (11 digits)", key="edit_old_matric")
+    new_name = st.text_input("New Full Name", key="edit_new_name")
+    new_matric = st.text_input("New Matric Number (11 digits)", key="edit_new_matric")
+
+    if st.button("Update Student"):
+        old_matric = old_matric.strip()
+        new_name = new_name.strip()
+        new_matric = new_matric.strip()
+
+        if not re.fullmatch(r"\d{11}", old_matric):
+            st.error("Old matric number must be exactly 11 digits.")
+            return
+
+        if not new_name or not new_matric:
+            st.error("New name and new matric number are required.")
+            return
+
+        if not re.fullmatch(r"\d{11}", new_matric):
+            st.error("New matric number must be exactly 11 digits.")
+            return
+
+        records = load_records()
+        mask = (records["attendance_id"] == attendance_id) & (records["matric"] == old_matric)
+
+        if records[mask].empty:
+            st.error("No student with that matric number exists in this attendance list.")
+            return
+
+        this_session = records[records["attendance_id"] == attendance_id].copy()
+
+        # prevent duplicate matric
+        if new_matric != old_matric and new_matric in this_session["matric"].values:
+            st.error("That new matric number already exists in this attendance list.")
+            return
+
+        # prevent duplicate name (case-insensitive)
+        if session_name_exists(records, attendance_id, new_name, exclude_matric=old_matric):
+            st.error("That new name already exists in this attendance list (case-insensitive).")
+            return
+
+        records.loc[mask, "full_name"] = new_name
+        records.loc[mask, "matric"] = new_matric
+        records.loc[mask, "time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        records.loc[mask, "device_id"] = "EDITED_BY_REP"
+
+        save_records(records)
+        st.success("Student updated successfully.")
+        st.rerun()
+
+    st.divider()
+
+    # -------- DELETE STUDENT --------
+    st.subheader("Delete Student (Rep Only)")
+    del_matric = st.text_input("Matric Number to Delete (11 digits)", key="delete_matric")
+
+    if st.button("Delete Student"):
+        del_matric = del_matric.strip()
+
+        if not re.fullmatch(r"\d{11}", del_matric):
+            st.error("Matric number must be exactly 11 digits.")
+            return
+
+        records = load_records()
+        before = len(records)
+
+        records = records[~((records["attendance_id"] == attendance_id) & (records["matric"] == del_matric))]
+        after = len(records)
+
+        if before == after:
+            st.error("No student with that matric number was found in this attendance list.")
+            return
+
+        save_records(records)
+        st.success("Student deleted successfully.")
+        st.rerun()
+
+# ---------------- ROUTER ----------------
+def main():
+    st.sidebar.title("Navigation")
+    page = st.sidebar.selectbox("Go to", ["Student", "Course Rep"])
+
+    if "rep_logged_in" not in st.session_state:
+        st.session_state.rep_logged_in = False
+
+    if page == "Student":
+        student_page()
+    else:
+        if not st.session_state.rep_logged_in:
+            rep_login()
+        else:
+            rep_dashboard()
+
+if __name__ == "__main__":
+    main()ions["attendance_id"] == attendance_id, "status"] = "Ended"
+        save_sessions(sessions)
+        st.success("Attendance ended. QR code is now invalid.")
+        st.rerun()
+
+    st.divider()
+
+    # -------- VIEW CURRENT LIST --------
+    st.subheader("Current Attendance List (Rep View)")
+    records = load_records()
+    this_session = records[records["attendance_id"] == attendance_id].copy()
+
+    if this_session.empty:
+        st.info("No students have marked attendance yet.")
+    else:
+        st.dataframe(
+            this_session[["full_name", "matric", "time", "device_id"]],
+            use_container_width=True
+        )
+
+    st.divider()
+
+    # -------- MANUAL ADD --------
+    st.subheader("Add Student Manually (Rep Only)")
+    m_name = st.text_input("Student Full Name", key="manual_name")
+    m_matric = st.text_input("Student Matric Number (11 digits)", key="manual_matric")
+
+    if st.button("Add Student"):
+        m_name = m_name.strip()
+        m_matric = m_matric.strip()
+
+        if not m_name or not m_matric:
+            st.error("Name and matric number are required.")
+            return
+
+        if not re.fullmatch(r"\d{11}", m_matric):
+            st.error("Matric number must be exactly 11 digits.")
+            return
+
+        records = load_records()
+        this_session = records[records["attendance_id"] == attendance_id]
+
+        if m_matric in this_session["matric"].values:
+            st.error("That matric number is already recorded for this attendance.")
+            return
+
+        if session_name_exists(records, attendance_id, m_name):
+            st.error("That name is already recorded for this attendance (case-insensitive).")
+            return
+
+        new = {
+            "attendance_id": attendance_id,
+            "full_name": m_name,
+            "matric": m_matric,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "device_id": "MANUAL_REP"
+        }
+
+        save_records(pd.concat([records, pd.DataFrame([new])], ignore_index=True))
+        st.success("Student added successfully.")
+        st.rerun()
+
+    st.divider()
+
+    # -------- EDIT STUDENT --------
+    st.subheader("Edit Student (Rep Only)")
+    st.caption("Edit by entering the student's OLD matric number.")
+
+    old_matric = st.text_input("Old Matric Number (11 digits)", key="edit_old_matric")
+    new_name = st.text_input("New Full Name", key="edit_new_name")
+    new_matric = st.text_input("New Matric Number (11 digits)", key="edit_new_matric")
+
+    if st.button("Update Student"):
+        old_matric = old_matric.strip()
+        new_name = new_name.strip()
+        new_matric = new_matric.strip()
+
+        if not re.fullmatch(r"\d{11}", old_matric):
+            st.error("Old matric number must be exactly 11 digits.")
+            return
+
+        if not new_name or not new_matric:
+            st.error("New name and new matric number are required.")
+            return
+
+        if not re.fullmatch(r"\d{11}", new_matric):
+            st.error("New matric number must be exactly 11 digits.")
+            return
+
+        records = load_records()
+        mask = (records["attendance_id"] == attendance_id) & (records["matric"] == old_matric)
+
+        if records[mask].empty:
+            st.error("No student with that matric number exists in this attendance list.")
+            return
+
+        this_session = records[records["attendance_id"] == attendance_id].copy()
+
+        # prevent duplicate matric
+        if new_matric != old_matric and new_matric in this_session["matric"].values:
+            st.error("That new matric number already exists in this attendance list.")
+            return
+
+        # prevent duplicate name (case-insensitive)
+        if session_name_exists(records, attendance_id, new_name, exclude_matric=old_matric):
+            st.error("That new name already exists in this attendance list (case-insensitive).")
+            return
+
+        records.loc[mask, "full_name"] = new_name
+        records.loc[mask, "matric"] = new_matric
+        records.loc[mask, "time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        records.loc[mask, "device_id"] = "EDITED_BY_REP"
+
+        save_records(records)
+        st.success("Student updated successfully.")
+        st.rerun()
+
+    st.divider()
+
+    # -------- DELETE STUDENT --------
+    st.subheader("Delete Student (Rep Only)")
+    del_matric = st.text_input("Matric Number to Delete (11 digits)", key="delete_matric")
+
+    if st.button("Delete Student"):
+        del_matric = del_matric.strip()
+
+        if not re.fullmatch(r"\d{11}", del_matric):
+            st.error("Matric number must be exactly 11 digits.")
+            return
+
+        records = load_records()
+        before = len(records)
+
+        records = records[~((records["attendance_id"] == attendance_id) & (records["matric"] == del_matric))]
+        after = len(records)
+
+        if before == after:
+            st.error("No student with that matric number was found in this attendance list.")
+            return
+
+        save_records(records)
+        st.success("Student deleted successfully.")
+        st.rerun()
+
+# ---------------- ROUTER ----------------
+def main():
+    st.sidebar.title("Navigation")
+    page = st.sidebar.selectbox("Go to", ["Student", "Course Rep"])
+
+    if "rep_logged_in" not in st.session_state:
+        st.session_state.rep_logged_in = False
+
+    if page == "Student":
+        student_page()
+    else:
+        if not st.session_state.rep_logged_in:
+            rep_login()
+        else:
+            rep_dashboard()
+
+if __name__ == "__main__":
+    main()imary"):
             sessions = load_sessions()
             sessions.loc[sessions["attendance_id"] == attendance_id, "status"] = "Ended"
             save_sessions(sessions)
