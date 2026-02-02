@@ -12,7 +12,9 @@ SESSIONS_FILE = "attendance_sessions.csv"
 RECORDS_FILE = "attendance_records.csv"
 
 SESSION_COLUMNS = ["attendance_id", "type", "title", "status", "created_at"]
-RECORD_COLUMNS = ["attendance_id", "full_name", "matric", "time", "device_id"]
+RECORD_COLUMNS = [
+    "attendance_id", "full_name", "matric", "time", "device_id", "manual"
+]
 
 REP_USERNAME = "rep"
 REP_PASSWORD = "epe100"
@@ -54,7 +56,7 @@ def student_page():
     attendance_id = params.get("attendance_id")
 
     if not attendance_id:
-        st.error("Invalid or missing attendance QR code.")
+        st.info("Ask your course rep to mark you present.")
         return
 
     sessions = load_sessions()
@@ -65,6 +67,7 @@ def student_page():
         return
 
     st.title(session.iloc[0]["title"])
+    st.caption("Scan QR and submit personally")
 
     name = st.text_input("Full Name")
     matric = st.text_input("Matric Number (11 digits)")
@@ -92,16 +95,16 @@ def student_page():
             st.error("This matric number has already been recorded.")
             return
 
-        new_record = {
+        new = {
             "attendance_id": attendance_id,
             "full_name": name,
             "matric": matric,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "device_id": device_id
+            "device_id": device_id,
+            "manual": False
         }
 
-        records = pd.concat([records, pd.DataFrame([new_record])], ignore_index=True)
-        save_records(records)
+        save_records(pd.concat([records, pd.DataFrame([new])]))
         st.success("Attendance recorded successfully.")
 
 # ---------------- COURSE REP LOGIN ----------------
@@ -134,69 +137,97 @@ def rep_dashboard():
             st.error("Course code required.")
         else:
             sessions = load_sessions()
-            attendance_id = str(uuid.uuid4())
+            att_id = str(uuid.uuid4())
 
-            new_session = {
-                "attendance_id": attendance_id,
+            new = {
+                "attendance_id": att_id,
                 "type": att_type,
                 "title": title,
                 "status": "Active",
                 "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
 
-            sessions = pd.concat([sessions, pd.DataFrame([new_session])], ignore_index=True)
-            save_sessions(sessions)
+            save_sessions(pd.concat([sessions, pd.DataFrame([new])]))
+            st.success("Attendance created")
+            st.image(generate_qr(att_id), caption="Optional QR")
 
-            qr_path = generate_qr(attendance_id)
-            st.success("Attendance created.")
-            st.image(qr_path, caption="Students scan this QR")
+    st.divider()
+
+    # ACTIVE ATTENDANCE SELECTION
+    sessions = load_sessions()
+    active = sessions[sessions["status"] == "Active"]
+
+    if active.empty:
+        st.info("No active attendance.")
+        return
+
+    selected = st.selectbox(
+        "Active Attendance",
+        active["title"] + " | " + active["attendance_id"]
+    )
+    attendance_id = selected.split("|")[-1].strip()
+
+    # MANUAL ENTRY
+    st.subheader("Manual Attendance Entry")
+
+    m_name = st.text_input("Student Full Name")
+    m_matric = st.text_input("Student Matric Number")
+
+    if st.button("Add Student Manually"):
+        if not m_name or not m_matric:
+            st.error("All fields required.")
+            return
+
+        if not re.fullmatch(r"\d{11}", m_matric):
+            st.error("Matric must be 11 digits.")
+            return
+
+        records = load_records()
+
+        if m_matric in records["matric"].values:
+            st.error("Matric already recorded.")
+            return
+
+        new = {
+            "attendance_id": attendance_id,
+            "full_name": m_name.strip(),
+            "matric": m_matric.strip(),
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "device_id": "MANUAL",
+            "manual": True
+        }
+
+        save_records(pd.concat([records, pd.DataFrame([new])]))
+        st.success("Student marked present")
 
     st.divider()
 
     # END ATTENDANCE
-    sessions = load_sessions()
-    active = sessions[sessions["status"] == "Active"]
-
-    if not active.empty:
-        selected = st.selectbox(
-            "Active Attendances",
-            active["title"] + " | " + active["attendance_id"]
-        )
-
-        if st.button("End Attendance"):
-            att_id = selected.split("|")[-1].strip()
-            sessions.loc[sessions["attendance_id"] == att_id, "status"] = "Ended"
-            save_sessions(sessions)
-            st.success("Attendance ended.")
+    if st.button("End Attendance"):
+        sessions.loc[sessions["attendance_id"] == attendance_id, "status"] = "Ended"
+        save_sessions(sessions)
+        st.success("Attendance ended")
 
     st.divider()
 
-    # EDIT ATTENDANCE RECORDS
-    st.subheader("Edit Attendance Records")
-
+    # VIEW / EDIT RECORDS
+    st.subheader("Attendance Records")
     records = load_records()
-    if records.empty:
-        st.info("No attendance records yet.")
-        return
+    view = records[records["attendance_id"] == attendance_id]
 
-    edited = st.data_editor(records, num_rows="fixed", use_container_width=True)
+    edited = st.data_editor(view, num_rows="fixed", use_container_width=True)
 
     if st.button("Save Changes"):
-        if edited["matric"].duplicated().any():
-            st.error("Duplicate matric numbers detected.")
-            return
-
-        if not edited["matric"].apply(lambda x: bool(re.fullmatch(r"\d{11}", str(x)))).all():
-            st.error("All matric numbers must be 11 digits.")
-            return
-
-        save_records(edited)
-        st.success("Changes saved.")
+        save_records(pd.concat([
+            records[records["attendance_id"] != attendance_id],
+            edited
+        ]))
+        st.success("Changes saved")
 
     st.download_button(
-        "Download Attendance CSV",
-        data=records.to_csv(index=False),
-        file_name="attendance_records.csv",
+        "Download CSV",
+        data=view.to_csv(index=False),
+        file_name="attendance.csv",
         mime="text/csv"
     )
 
