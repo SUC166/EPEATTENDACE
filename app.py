@@ -3,20 +3,12 @@ import streamlit as st
 import pandas as pd
 import os
 import re
-import math
 from datetime import datetime
-import streamlit.components.v1 as components
 
 ATTENDANCE_FILE = "attendance.csv"
 COLUMNS = ["Full Name", "Matric No", "Time"]
 
-# ===== GPS SETTINGS (LECTURE HALL COORDINATES) =====
-LECTURE_LAT = 5.384071
-LECTURE_LON = 6.999249
-MAX_DISTANCE_METERS = 500
 
-
-# ---------------- Utilities ----------------
 def load_data():
     if os.path.exists(ATTENDANCE_FILE):
         try:
@@ -30,79 +22,9 @@ def save_data(df):
     df.to_csv(ATTENDANCE_FILE, index=False)
 
 
-def distance_m(lat1, lon1, lat2, lon2):
-    R = 6371000  # meters
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-
-# ---------------- GPS HANDLING (FIXED) ----------------
-if "gps" not in st.session_state:
-    st.session_state.gps = None
-
-components.html(
-    """
-    <script>
-    if (!window.gpsSent && navigator.geolocation) {
-        window.gpsSent = true;
-        navigator.geolocation.getCurrentPosition(
-            (pos) => {
-                const lat = pos.coords.latitude;
-                const lon = pos.coords.longitude;
-                window.parent.postMessage({ type: 'GPS', lat, lon }, '*');
-            },
-            (err) => {
-                window.parent.postMessage({ type: 'GPS_ERROR' }, '*');
-            }
-        );
-    }
-    </script>
-    """,
-    height=0,
-)
-
-components.html(
-    """
-    <script>
-    window.addEventListener('message', (event) => {
-        if (event.data.type === 'GPS') {
-            const url = new URL(window.location);
-            url.searchParams.set('gps', `${event.data.lat},${event.data.lon}`);
-            window.history.replaceState({}, '', url);
-        }
-    });
-    </script>
-    """,
-    height=0,
-)
-
-params = st.experimental_get_query_params()
-if "gps" in params and st.session_state.gps is None:
-    lat, lon = params["gps"][0].split(",")
-    st.session_state.gps = (float(lat), float(lon))
-
-
 # ---------------- Student Page ----------------
 def attendance_page():
     st.title("EPE 100LVL Attendance")
-    st.warning("📍 Location access is required to mark attendance")
-
-    if st.session_state.gps is None:
-        st.info("Waiting for GPS permission… If prompted, please allow location access.")
-        st.stop()
-
-    user_lat, user_lon = st.session_state.gps
-    dist = distance_m(user_lat, user_lon, LECTURE_LAT, LECTURE_LON)
-
-    if dist > MAX_DISTANCE_METERS:
-        st.error("❌ You are not within 500 meters of the lecture hall")
-        st.stop()
-
-    st.success("✅ Location verified. You may mark attendance.")
 
     name = st.text_input("Full Name")
     matric = st.text_input("Matric / Reg Number (11 digits)")
@@ -115,12 +37,14 @@ def attendance_page():
             st.error("Please fill in all fields")
             return
 
+        # Validate matric number: exactly 11 digits, no letters
         if not re.fullmatch(r"\d{11}", matric_clean):
             st.error("Matric number must be exactly 11 digits (numbers only)")
             return
 
         df = load_data()
 
+        # Case-insensitive duplicate checks
         if name_clean.lower() in df["Full Name"].astype(str).str.lower().values:
             st.error("This name has already been recorded")
             return
@@ -171,19 +95,25 @@ def rep_dashboard():
         return
 
     st.subheader("Edit Attendance (Course Rep Only)")
+    st.caption("You can correct names or matric numbers. All rules still apply.")
 
-    edited_df = st.data_editor(df, num_rows="fixed", use_container_width=True)
+    edited_df = st.data_editor(
+        df,
+        num_rows="fixed",
+        use_container_width=True,
+    )
 
     if st.button("Save Changes"):
+        # Validation after editing
         names_lower = edited_df["Full Name"].astype(str).str.strip().str.lower()
         matrics = edited_df["Matric No"].astype(str).str.strip()
 
         if names_lower.duplicated().any():
-            st.error("Duplicate names detected.")
+            st.error("Duplicate names detected (case-insensitive). Changes not saved.")
             return
 
         if matrics.duplicated().any():
-            st.error("Duplicate matric numbers detected.")
+            st.error("Duplicate matric numbers detected. Changes not saved.")
             return
 
         if not matrics.apply(lambda x: bool(re.fullmatch(r"\d{11}", x))).all():
@@ -195,6 +125,8 @@ def rep_dashboard():
 
         save_data(edited_df)
         st.success("Attendance updated successfully")
+
+    st.divider()
 
     st.download_button(
         "Download CSV",
@@ -227,3 +159,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    
