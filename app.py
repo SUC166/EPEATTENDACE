@@ -5,6 +5,9 @@ import re
 import hashlib
 from datetime import datetime
 import qrcode
+import numpy as np
+import cv2
+from pyzbar.pyzbar import decode
 
 # ---------------- CONFIG ----------------
 SESSIONS_FILE = "attendance_sessions.csv"
@@ -35,7 +38,7 @@ def save_records(df):
 
 def get_device_id():
     if "device_id" not in st.session_state:
-        raw = f"{st.session_state}_{datetime.now().date()}"
+        raw = f"{st.session_state}{datetime.now().date()}"
         st.session_state.device_id = hashlib.sha256(raw.encode()).hexdigest()
     return st.session_state.device_id
 
@@ -51,34 +54,51 @@ def generate_attendance_id(att_type, title):
         return f"{day}_{date}_{time}"
 
 def generate_qr(attendance_id):
-    url = f"?attendance_id={attendance_id}"
-    img = qrcode.make(url)
+    img = qrcode.make(attendance_id)
     path = f"qr_{attendance_id}.png"
     img.save(path)
     return path
 
+# ---------------- QR SCANNER ----------------
+def scan_qr():
+    st.subheader("Scan Attendance QR Code")
+    img = st.camera_input("Point camera at QR code")
+
+    if img:
+        image = np.array(img)
+        decoded = decode(image)
+
+        if not decoded:
+            st.error("No QR code detected. Try again.")
+            return None
+
+        return decoded[0].data.decode("utf-8")
+
+    return None
+
 # ---------------- STUDENT PAGE ----------------
 def student_page():
-    params = st.query_params
-    attendance_id = params.get("attendance_id")
+    st.title("Student Attendance")
 
-    if not attendance_id:
-        st.info("Scan the QR code provided in class.")
+    qr_data = scan_qr()
+    if not qr_data:
+        st.info("Scan the QR code to continue.")
         return
 
+    attendance_id = qr_data.strip()
     sessions = load_sessions()
     session = sessions[sessions["attendance_id"] == attendance_id]
 
     if session.empty:
-        st.error("Invalid attendance QR code.")
+        st.error("Invalid attendance QR.")
         return
 
     if session.iloc[0]["status"] != "Active":
         st.error("Attendance has been closed.")
         return
 
+    st.success("Attendance validated")
     st.title(session.iloc[0]["title"])
-    st.caption("Attendance is active")
 
     name = st.text_input("Full Name")
     matric = st.text_input("Matric Number (11 digits)")
@@ -88,7 +108,7 @@ def student_page():
         matric = matric.strip()
 
         if not name or not matric:
-            st.error("All fields are required.")
+            st.error("All fields required.")
             return
 
         if not re.fullmatch(r"\d{11}", matric):
@@ -114,20 +134,21 @@ def student_page():
             "device_id": device_id
         }
 
-        save_records(pd.concat([records, pd.DataFrame([new])]))
+        save_records(pd.concat([records, pd.DataFrame([new])], ignore_index=True))
         st.success("Attendance recorded successfully.")
 
-    # Show current attendance
-    st.subheader("Current Attendance List")
+    st.subheader("Current Attendance")
     records = load_records()
-    st.dataframe(records[records["attendance_id"] == attendance_id][
-        ["full_name", "matric", "time"]
-    ])
+    st.dataframe(
+        records[records["attendance_id"] == attendance_id][
+            ["full_name", "matric", "time"]
+        ],
+        use_container_width=True
+    )
 
 # ---------------- COURSE REP LOGIN ----------------
 def rep_login():
     st.title("Course Rep Login")
-
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
@@ -141,7 +162,6 @@ def rep_login():
 def rep_dashboard():
     st.title("Course Rep Dashboard")
 
-    # CREATE ATTENDANCE
     st.subheader("Create Attendance")
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
     title = "Daily Attendance"
@@ -151,89 +171,14 @@ def rep_dashboard():
 
     if st.button("Create Attendance"):
         if att_type == "Per Subject" and not title.strip():
-            st.error("Course code is required.")
+            st.error("Course code required.")
             return
 
         attendance_id = generate_attendance_id(att_type, title)
-
         sessions = load_sessions()
+
         if attendance_id in sessions["attendance_id"].values:
             st.error("Attendance already exists.")
             return
 
         new = {
-            "attendance_id": attendance_id,
-            "type": att_type,
-            "title": title if att_type == "Per Subject" else "Daily Attendance",
-            "status": "Active",
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-
-        save_sessions(pd.concat([sessions, pd.DataFrame([new])]))
-        st.success("Attendance created")
-        st.image(generate_qr(attendance_id), caption="Students scan this QR")
-
-    st.divider()
-
-    # ACTIVE ATTENDANCE
-    sessions = load_sessions()
-    active = sessions[sessions["status"] == "Active"]
-
-    if active.empty:
-        st.info("No active attendance.")
-        return
-
-    selected = st.selectbox("Active Attendance", active["attendance_id"])
-    attendance_id = selected
-
-    # MANUAL ENTRY (COURSE REP)
-    st.subheader("Manual Entry (Course Rep)")
-    m_name = st.text_input("Your Full Name")
-    m_matric = st.text_input("Your Matric Number")
-
-    if st.button("Mark Myself Present"):
-        if not m_name or not m_matric:
-            st.error("All fields required.")
-            return
-
-        records = load_records()
-        if m_matric in records["matric"].values:
-            st.error("Already recorded.")
-            return
-
-        new = {
-            "attendance_id": attendance_id,
-            "full_name": m_name.strip(),
-            "matric": m_matric.strip(),
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "device_id": "MANUAL"
-        }
-
-        save_records(pd.concat([records, pd.DataFrame([new])]))
-        st.success("Marked present")
-
-    st.divider()
-
-    if st.button("End Attendance"):
-        sessions.loc[sessions["attendance_id"] == attendance_id, "status"] = "Ended"
-        save_sessions(sessions)
-        st.success("Attendance ended. QR code is now invalid.")
-
-# ---------------- ROUTER ----------------
-def main():
-    st.sidebar.title("Navigation")
-    page = st.sidebar.selectbox("Go to", ["Student", "Course Rep"])
-
-    if "rep_logged_in" not in st.session_state:
-        st.session_state.rep_logged_in = False
-
-    if page == "Student":
-        student_page()
-    else:
-        if not st.session_state.rep_logged_in:
-            rep_login()
-        else:
-            rep_dashboard()
-
-if __name__ == "__main__":
-    main()
