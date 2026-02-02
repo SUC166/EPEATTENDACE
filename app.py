@@ -44,29 +44,26 @@ def attendance_page():
     name = st.text_input("Full Name")
     matric = st.text_input("Matric / Reg Number (11 digits)")
 
-    # Get GPS automatically
-    try:
-        gps = streamlit_js_eval(
-            "new Promise((resolve) => { "
-            "navigator.geolocation.getCurrentPosition("
-            "pos => resolve([pos.coords.latitude, pos.coords.longitude]), "
-            "err => resolve(null)"
-            "); "
-            "})",
-            label="get_gps"
-        )
-    except Exception as e:
-        st.error(f"Error getting GPS: {e}")
-        st.stop()
+    # ---------------- GET GPS ----------------
+    if "gps" not in st.session_state:
+        try:
+            gps = streamlit_js_eval(
+                "navigator.geolocation.getCurrentPosition(pos => [pos.coords.latitude, pos.coords.longitude], err => null)",
+                key="get_gps"
+            )
+            st.session_state.gps = gps
+        except Exception as e:
+            st.error(f"Error getting GPS: {e}")
+            st.stop()
 
-    if gps is None:
+    if st.session_state.gps is None:
         st.warning("Waiting for GPS… Please allow location access on your device.")
         st.stop()
-    else:
-        lat, lon = gps
-        st.success(f"Location detected: {lat:.6f}, {lon:.6f}")
 
-    # Check distance to lecture hall
+    lat, lon = st.session_state.gps
+    st.success(f"Location detected: {lat:.6f}, {lon:.6f}")
+
+    # ---------------- DISTANCE CHECK ----------------
     dist = distance_m(lat, lon, LECTURE_LAT, LECTURE_LON)
     if dist > MAX_DISTANCE_METERS:
         st.error(f"❌ You are {int(dist)} meters away from the lecture hall. Attendance can only be submitted within {MAX_DISTANCE_METERS} meters.")
@@ -74,6 +71,7 @@ def attendance_page():
     else:
         st.info(f"✅ You are {int(dist)} meters from the lecture hall. You can submit attendance.")
 
+    # ---------------- SUBMIT ATTENDANCE ----------------
     if st.button("Submit Attendance"):
         name_clean = name.strip()
         matric_clean = matric.strip()
