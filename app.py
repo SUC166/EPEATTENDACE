@@ -11,7 +11,6 @@ ATTENDANCE_FILE = "attendance.csv"
 COLUMNS = ["Full Name", "Matric No", "Time"]
 
 # ===== GPS SETTINGS (LECTURE HALL COORDINATES) =====
-# Provided coordinates for the lecture hall
 LECTURE_LAT = 5.384071
 LECTURE_LON = 6.999249
 MAX_DISTANCE_METERS = 500
@@ -41,24 +40,41 @@ def distance_m(lat1, lon1, lat2, lon2):
     return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-# ---------------- GPS HANDLING ----------------
+# ---------------- GPS HANDLING (FIXED) ----------------
 if "gps" not in st.session_state:
     st.session_state.gps = None
 
 components.html(
     """
     <script>
-    if (navigator.geolocation) {
+    if (!window.gpsSent && navigator.geolocation) {
+        window.gpsSent = true;
         navigator.geolocation.getCurrentPosition(
             (pos) => {
                 const lat = pos.coords.latitude;
                 const lon = pos.coords.longitude;
-                const url = new URL(window.location);
-                url.searchParams.set('gps', `${lat},${lon}`);
-                window.history.replaceState({}, '', url);
+                window.parent.postMessage({ type: 'GPS', lat, lon }, '*');
+            },
+            (err) => {
+                window.parent.postMessage({ type: 'GPS_ERROR' }, '*');
             }
         );
     }
+    </script>
+    """,
+    height=0,
+)
+
+components.html(
+    """
+    <script>
+    window.addEventListener('message', (event) => {
+        if (event.data.type === 'GPS') {
+            const url = new URL(window.location);
+            url.searchParams.set('gps', `${event.data.lat},${event.data.lon}`);
+            window.history.replaceState({}, '', url);
+        }
+    });
     </script>
     """,
     height=0,
@@ -76,7 +92,7 @@ def attendance_page():
     st.warning("📍 Location access is required to mark attendance")
 
     if st.session_state.gps is None:
-        st.info("Waiting for GPS permission… Please allow location access.")
+        st.info("Waiting for GPS permission… If prompted, please allow location access.")
         st.stop()
 
     user_lat, user_lon = st.session_state.gps
