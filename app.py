@@ -7,6 +7,8 @@ from datetime import datetime
 import qrcode
 
 # ---------------- CONFIG ----------------
+APP_BASE_URL = "https://epeattendance.streamlit.app"  # CHANGE IF NEEDED
+
 SESSIONS_FILE = "attendance_sessions.csv"
 RECORDS_FILE = "attendance_records.csv"
 
@@ -50,7 +52,7 @@ def generate_attendance_id(att_type, title):
     return f"{day}_{date}_{time}"
 
 def generate_qr(attendance_id):
-    url = f"?attendance_id={attendance_id}"
+    url = f"{APP_BASE_URL}/?attendance_id={attendance_id}"
     img = qrcode.make(url)
     path = f"qr_{attendance_id}.png"
     img.save(path)
@@ -62,7 +64,7 @@ def student_page():
     attendance_id = params.get("attendance_id")
 
     if not attendance_id:
-        st.info("Scan the QR code displayed in class.")
+        st.info("Scan the QR code displayed in class to mark attendance.")
         return
 
     sessions = load_sessions()
@@ -102,7 +104,7 @@ def student_page():
             return
 
         if matric in records["matric"].values:
-            st.error("This matric number is already recorded.")
+            st.error("This matric number has already been recorded.")
             return
 
         new = {
@@ -147,11 +149,11 @@ def rep_dashboard():
     title = "Daily Attendance"
 
     if att_type == "Per Subject":
-        title = st.text_input("Course Code (e.g EPE101)")
+        title = st.text_input("Course Code (e.g IGB101)")
 
     if st.button("Create Attendance"):
         if att_type == "Per Subject" and not title.strip():
-            st.error("Course code required.")
+            st.error("Course code is required.")
             return
 
         attendance_id = generate_attendance_id(att_type, title)
