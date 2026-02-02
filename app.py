@@ -182,3 +182,70 @@ def rep_dashboard():
             return
 
         new = {
+            "attendance_id": attendance_id,
+            "type": att_type,
+            "title": title if att_type == "Per Subject" else "Daily Attendance",
+            "status": "Active",
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+        save_sessions(pd.concat([sessions, pd.DataFrame([new])], ignore_index=True))
+        st.success("Attendance created")
+        st.image(generate_qr(attendance_id), caption="Students scan this QR")
+
+    st.divider()
+
+    sessions = load_sessions()
+    active = sessions[sessions["status"] == "Active"]
+
+    if active.empty:
+        st.info("No active attendance.")
+        return
+
+    attendance_id = st.selectbox("Active Attendance", active["attendance_id"])
+
+    st.subheader("Mark Yourself Present")
+    m_name = st.text_input("Your Full Name")
+    m_matric = st.text_input("Your Matric Number")
+
+    if st.button("Mark Present"):
+        records = load_records()
+
+        if m_matric in records["matric"].values:
+            st.error("Already recorded.")
+            return
+
+        new = {
+            "attendance_id": attendance_id,
+            "full_name": m_name.strip(),
+            "matric": m_matric.strip(),
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "device_id": "MANUAL"
+        }
+
+        save_records(pd.concat([records, pd.DataFrame([new])], ignore_index=True))
+        st.success("Marked present")
+
+    if st.button("End Attendance"):
+        sessions.loc[sessions["attendance_id"] == attendance_id, "status"] = "Ended"
+        save_sessions(sessions)
+        st.success("Attendance ended. QR code is now invalid.")
+
+# ---------------- ROUTER ----------------
+def main():
+    st.sidebar.title("Navigation")
+    page = st.sidebar.selectbox("Go to", ["Student", "Course Rep"])
+
+    if "rep_logged_in" not in st.session_state:
+        st.session_state.rep_logged_in = False
+
+    if page == "Student":
+        student_page()
+    else:
+        if not st.session_state.rep_logged_in:
+            rep_login()
+        else:
+            rep_dashboard()
+
+if __name__ == "__main__":
+    main()
