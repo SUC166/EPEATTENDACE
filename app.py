@@ -1,211 +1,218 @@
-# app.py
 import streamlit as st
 import pandas as pd
+import os
 import re
-import requests
-import math
+import uuid
+import hashlib
 from datetime import datetime
-import streamlit.components.v1 as components
+import qrcode
 
-# ---------------- Backend URL ----------------
-BACKEND_URL = "https://epeattendace.onrender.com/submit"
+# ---------------- CONFIG ----------------
+SESSIONS_FILE = "attendance_sessions.csv"
+RECORDS_FILE = "attendance_records.csv"
 
-# ---------------- Lecture Hall GPS ----------------
-LECTURE_LAT = 5.384071
-LECTURE_LON = 6.999249
-MAX_DISTANCE_METERS = 500
+SESSION_COLUMNS = ["attendance_id", "type", "title", "status", "created_at"]
+RECORD_COLUMNS = ["attendance_id", "full_name", "matric", "time", "device_id"]
 
-# ---------------- Utilities ----------------
-COLUMNS = ["Full Name", "Matric No", "Time"]
+REP_USERNAME = "rep"
+REP_PASSWORD = "epe100"
 
-def load_data():
-    try:
-        return pd.read_csv("attendance.csv")
-    except FileNotFoundError:
-        return pd.DataFrame(columns=COLUMNS)
+# ---------------- HELPERS ----------------
+def load_sessions():
+    if os.path.exists(SESSIONS_FILE):
+        return pd.read_csv(SESSIONS_FILE)
+    return pd.DataFrame(columns=SESSION_COLUMNS)
 
-def save_data(df):
-    df.to_csv("attendance.csv", index=False)
+def save_sessions(df):
+    df.to_csv(SESSIONS_FILE, index=False)
 
-def distance_m(lat1, lon1, lat2, lon2):
-    """Haversine distance in meters"""
-    R = 6371000
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+def load_records():
+    if os.path.exists(RECORDS_FILE):
+        return pd.read_csv(RECORDS_FILE)
+    return pd.DataFrame(columns=RECORD_COLUMNS)
 
-# ---------------- Student Attendance ----------------
-def attendance_page():
-    st.title("EPE 100LVL Attendance")
-    st.info("📍 Tap **Verify Location** and allow the browser to share your location.")
+def save_records(df):
+    df.to_csv(RECORDS_FILE, index=False)
 
-    # ---------------- Get GPS from URL query param ----------------
+def get_device_id():
+    if "device_id" not in st.session_state:
+        st.session_state.device_id = hashlib.sha256(
+            str(uuid.uuid4()).encode()
+        ).hexdigest()
+    return st.session_state.device_id
+
+def generate_qr(attendance_id):
+    url = f"?attendance_id={attendance_id}"
+    img = qrcode.make(url)
+    path = f"qr_{attendance_id}.png"
+    img.save(path)
+    return path
+
+# ---------------- STUDENT PAGE ----------------
+def student_page():
     params = st.query_params
-    if "gps" in params and st.session_state.get("gps") is None:
-        try:
-            lat_str, lon_str = params["gps"][0].split(",")
-            st.session_state.gps = (float(lat_str), float(lon_str))
-        except Exception:
-            st.session_state.gps = None
+    attendance_id = params.get("attendance_id")
 
-    # ---------------- Show Verify button if no GPS ----------------
-    if "gps" not in st.session_state or st.session_state.gps is None:
-        if st.button("📡 Verify Location"):
-            components.html(
-                """
-                <script>
-                try {
-                    if (!navigator.geolocation) {
-                        alert('Geolocation is not supported by your browser.');
-                    } else {
-                        navigator.geolocation.getCurrentPosition(
-                            function(position) {
-                                const lat = position.coords.latitude.toFixed(6);
-                                const lon = position.coords.longitude.toFixed(6);
-                                const url = new URL(window.location.href);
-                                url.searchParams.set('gps', lat + ',' + lon);
-                                url.searchParams.set('gps_ts', Date.now());
-                                window.location.href = url.toString();
-                            },
-                            function(error) {
-                                console.error(error);
-                                alert('Could not get location. Please make sure location access is allowed and try again.');
-                            },
-                            {enableHighAccuracy:true, timeout:20000, maximumAge:0}
-                        );
-                    }
-                } catch(e){
-                    alert('Unexpected error getting location: ' + e);
-                }
-                </script>
-                """,
-                height=0,
-            )
-            st.stop()
-        else:
-            st.write("Click **Verify Location** to begin.")
-            st.stop()
+    if not attendance_id:
+        st.error("Invalid or missing attendance QR code.")
+        return
 
-    # ---------------- At this point GPS exists ----------------
-    lat, lon = st.session_state.gps
-    st.success(f"Location detected: {lat:.6f}, {lon:.6f}")
+    sessions = load_sessions()
+    session = sessions[sessions["attendance_id"] == attendance_id]
 
-    # ---------------- Distance check ----------------
-    dist = distance_m(lat, lon, LECTURE_LAT, LECTURE_LON)
-    if dist > MAX_DISTANCE_METERS:
-        st.error(f"❌ You are {int(dist)} m from the lecture hall. Attendance only allowed within {MAX_DISTANCE_METERS} m.")
-        can_submit = False
-    else:
-        st.info(f"✅ You are {int(dist)} m from the lecture hall — you may submit attendance.")
-        can_submit = True
+    if session.empty or session.iloc[0]["status"] != "Active":
+        st.error("Attendance is closed.")
+        return
 
-    # ---------------- Student Inputs ----------------
+    st.title(session.iloc[0]["title"])
+
     name = st.text_input("Full Name")
-    matric = st.text_input("Matric / Reg Number (11 digits)")
+    matric = st.text_input("Matric Number (11 digits)")
 
-    if st.button("Submit Attendance") and can_submit:
-        name_clean = name.strip()
-        matric_clean = matric.strip()
+    if st.button("Submit Attendance"):
+        name = name.strip()
+        matric = matric.strip()
 
-        if not name_clean or not matric_clean:
-            st.error("Please fill in all fields.")
+        if not name or not matric:
+            st.error("All fields are required.")
             return
 
-        if not re.fullmatch(r"\d{11}", matric_clean):
+        if not re.fullmatch(r"\d{11}", matric):
             st.error("Matric number must be exactly 11 digits.")
             return
 
-        payload = {
-            "full_name": name_clean,
-            "matric_no": matric_clean,
-            "latitude": lat,
-            "longitude": lon,
+        records = load_records()
+        device_id = get_device_id()
+
+        if device_id in records["device_id"].values:
+            st.error("This device has already submitted attendance.")
+            return
+
+        if matric in records["matric"].values:
+            st.error("This matric number has already been recorded.")
+            return
+
+        new_record = {
+            "attendance_id": attendance_id,
+            "full_name": name,
+            "matric": matric,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "device_id": device_id
         }
 
-        try:
-            res = requests.post(BACKEND_URL, json=payload, timeout=10)
-            if res.status_code == 200:
-                st.success("Attendance recorded successfully ✅")
-            else:
-                detail = None
-                try:
-                    detail = res.json().get("detail") or res.json().get("message")
-                except Exception:
-                    detail = res.text
-                st.error(f"❌ {detail}")
-        except Exception as e:
-            st.error(f"Error connecting to backend: {e}")
+        records = pd.concat([records, pd.DataFrame([new_record])], ignore_index=True)
+        save_records(records)
+        st.success("Attendance recorded successfully.")
 
-    st.subheader("Recorded Attendance")
-    st.dataframe(load_data())
-
-# ---------------- Course Rep Login ----------------
-def rep_login_page():
+# ---------------- COURSE REP LOGIN ----------------
+def rep_login():
     st.title("Course Rep Login")
-    USERNAME = "rep"
-    PASSWORD = "epe100"
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if username == USERNAME and password == PASSWORD:
-            st.session_state.logged_in = True
+        if username == REP_USERNAME and password == REP_PASSWORD:
+            st.session_state.rep_logged_in = True
         else:
-            st.error("Invalid login details")
+            st.error("Invalid credentials")
 
-# ---------------- Course Rep Dashboard ----------------
+# ---------------- COURSE REP DASHBOARD ----------------
 def rep_dashboard():
     st.title("Course Rep Dashboard")
-    df = load_data()
-    if df.empty:
-        st.info("No attendance recorded yet.")
-        return
 
-    st.subheader("Edit Attendance (Course Rep Only)")
-    st.caption("You can correct names or matric numbers. All rules still apply.")
-    edited_df = st.data_editor(df, num_rows="fixed", use_container_width=True)
+    # CREATE ATTENDANCE
+    st.subheader("Create Attendance")
+    att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
+    title = "Daily Attendance"
 
-    if st.button("Save Changes"):
-        names_lower = edited_df["Full Name"].astype(str).str.strip().str.lower()
-        matrics = edited_df["Matric No"].astype(str).str.strip()
+    if att_type == "Per Subject":
+        title = st.text_input("Course Code (e.g EPE101)")
 
-        if names_lower.duplicated().any():
-            st.error("Duplicate names detected (case-insensitive). Changes not saved.")
-            return
-        if matrics.duplicated().any():
-            st.error("Duplicate matric numbers detected. Changes not saved.")
-            return
-        if not matrics.apply(lambda x: bool(re.fullmatch(r"\d{11}", x))).all():
-            st.error("All matric numbers must be exactly 11 digits.")
-            return
+    if st.button("Create Attendance"):
+        if att_type == "Per Subject" and not title.strip():
+            st.error("Course code required.")
+        else:
+            sessions = load_sessions()
+            attendance_id = str(uuid.uuid4())
 
-        edited_df["Full Name"] = edited_df["Full Name"].astype(str).str.strip()
-        edited_df["Matric No"] = matrics
-        save_data(edited_df)
-        st.success("Attendance updated successfully")
+            new_session = {
+                "attendance_id": attendance_id,
+                "type": att_type,
+                "title": title,
+                "status": "Active",
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+
+            sessions = pd.concat([sessions, pd.DataFrame([new_session])], ignore_index=True)
+            save_sessions(sessions)
+
+            qr_path = generate_qr(attendance_id)
+            st.success("Attendance created.")
+            st.image(qr_path, caption="Students scan this QR")
 
     st.divider()
-    st.download_button("Download CSV", data=df.to_csv(index=False), file_name="attendance.csv", mime="text/csv")
-    if st.button("Reset Attendance"):
-        save_data(pd.DataFrame(columns=COLUMNS))
-        st.success("Attendance list has been reset")
 
-# ---------------- App Router ----------------
+    # END ATTENDANCE
+    sessions = load_sessions()
+    active = sessions[sessions["status"] == "Active"]
+
+    if not active.empty:
+        selected = st.selectbox(
+            "Active Attendances",
+            active["title"] + " | " + active["attendance_id"]
+        )
+
+        if st.button("End Attendance"):
+            att_id = selected.split("|")[-1].strip()
+            sessions.loc[sessions["attendance_id"] == att_id, "status"] = "Ended"
+            save_sessions(sessions)
+            st.success("Attendance ended.")
+
+    st.divider()
+
+    # EDIT ATTENDANCE RECORDS
+    st.subheader("Edit Attendance Records")
+
+    records = load_records()
+    if records.empty:
+        st.info("No attendance records yet.")
+        return
+
+    edited = st.data_editor(records, num_rows="fixed", use_container_width=True)
+
+    if st.button("Save Changes"):
+        if edited["matric"].duplicated().any():
+            st.error("Duplicate matric numbers detected.")
+            return
+
+        if not edited["matric"].apply(lambda x: bool(re.fullmatch(r"\d{11}", str(x)))).all():
+            st.error("All matric numbers must be 11 digits.")
+            return
+
+        save_records(edited)
+        st.success("Changes saved.")
+
+    st.download_button(
+        "Download Attendance CSV",
+        data=records.to_csv(index=False),
+        file_name="attendance_records.csv",
+        mime="text/csv"
+    )
+
+# ---------------- ROUTER ----------------
 def main():
     st.sidebar.title("Navigation")
-    page = st.sidebar.selectbox("Go to", ["Attendance", "Course Rep"])
+    page = st.sidebar.selectbox("Go to", ["Student Attendance", "Course Rep"])
 
-    if "logged_in" not in st.session_state:
-        st.session_state.logged_in = False
+    if "rep_logged_in" not in st.session_state:
+        st.session_state.rep_logged_in = False
 
-    if page == "Attendance":
-        attendance_page()
+    if page == "Student Attendance":
+        student_page()
     else:
-        if not st.session_state.logged_in:
-            rep_login_page()
+        if not st.session_state.rep_logged_in:
+            rep_login()
         else:
             rep_dashboard()
 
