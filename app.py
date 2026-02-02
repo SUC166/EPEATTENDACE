@@ -41,7 +41,7 @@ def attendance_page():
     st.title("EPE 100LVL Attendance")
     st.info("📍 Tap **Verify Location** and allow the browser to share your location.")
 
-    # Check GPS from query params
+    # ---------------- Get GPS from URL query param ----------------
     params = st.query_params
     if "gps" in params and st.session_state.get("gps") is None:
         try:
@@ -50,29 +50,34 @@ def attendance_page():
         except Exception:
             st.session_state.gps = None
 
-    # If GPS not yet obtained, show Verify button
+    # ---------------- Show Verify button if no GPS ----------------
     if "gps" not in st.session_state or st.session_state.gps is None:
         if st.button("📡 Verify Location"):
             components.html(
                 """
                 <script>
-                if (!navigator.geolocation) {
-                    alert('Geolocation is not supported by your browser.');
-                } else {
-                    navigator.geolocation.getCurrentPosition(
-                        function(position) {
-                            const lat = position.coords.latitude.toFixed(6);
-                            const lon = position.coords.longitude.toFixed(6);
-                            const url = new URL(window.location.href);
-                            url.searchParams.set('gps', lat + ',' + lon);
-                            url.searchParams.set('gps_ts', Date.now());
-                            window.location.href = url.toString();
-                        },
-                        function(error) {
-                            alert('Could not get location. Please allow location access.');
-                        },
-                        {enableHighAccuracy:true, timeout:10000}
-                    );
+                try {
+                    if (!navigator.geolocation) {
+                        alert('Geolocation is not supported by your browser.');
+                    } else {
+                        navigator.geolocation.getCurrentPosition(
+                            function(position) {
+                                const lat = position.coords.latitude.toFixed(6);
+                                const lon = position.coords.longitude.toFixed(6);
+                                const url = new URL(window.location.href);
+                                url.searchParams.set('gps', lat + ',' + lon);
+                                url.searchParams.set('gps_ts', Date.now());
+                                window.location.href = url.toString();
+                            },
+                            function(error) {
+                                console.error(error);
+                                alert('Could not get location. Please make sure location access is allowed and try again.');
+                            },
+                            {enableHighAccuracy:true, timeout:20000, maximumAge:0}
+                        );
+                    }
+                } catch(e){
+                    alert('Unexpected error getting location: ' + e);
                 }
                 </script>
                 """,
@@ -87,7 +92,7 @@ def attendance_page():
     lat, lon = st.session_state.gps
     st.success(f"Location detected: {lat:.6f}, {lon:.6f}")
 
-    # Distance check
+    # ---------------- Distance check ----------------
     dist = distance_m(lat, lon, LECTURE_LAT, LECTURE_LON)
     if dist > MAX_DISTANCE_METERS:
         st.error(f"❌ You are {int(dist)} m from the lecture hall. Attendance only allowed within {MAX_DISTANCE_METERS} m.")
@@ -100,7 +105,6 @@ def attendance_page():
     name = st.text_input("Full Name")
     matric = st.text_input("Matric / Reg Number (11 digits)")
 
-    # Submit button only if in range
     if st.button("Submit Attendance") and can_submit:
         name_clean = name.strip()
         matric_clean = matric.strip()
