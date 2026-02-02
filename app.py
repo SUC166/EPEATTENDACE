@@ -144,4 +144,66 @@ def rep_login_page():
     PASSWORD = "epe100"
 
     username = st.text_input("Username")
-    password = st.text_input("Password",
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if username == USERNAME and password == PASSWORD:
+            st.session_state.logged_in = True
+        else:
+            st.error("Invalid login details")
+
+# ---------------- Course Rep Dashboard ----------------
+def rep_dashboard():
+    st.title("Course Rep Dashboard")
+    df = load_data()
+    if df.empty:
+        st.info("No attendance recorded yet.")
+        return
+
+    st.subheader("Edit Attendance (Course Rep Only)")
+    st.caption("You can correct names or matric numbers. All rules still apply.")
+    edited_df = st.data_editor(df, num_rows="fixed", use_container_width=True)
+
+    if st.button("Save Changes"):
+        names_lower = edited_df["Full Name"].astype(str).str.strip().str.lower()
+        matrics = edited_df["Matric No"].astype(str).str.strip()
+
+        if names_lower.duplicated().any():
+            st.error("Duplicate names detected (case-insensitive). Changes not saved.")
+            return
+        if matrics.duplicated().any():
+            st.error("Duplicate matric numbers detected. Changes not saved.")
+            return
+        if not matrics.apply(lambda x: bool(re.fullmatch(r"\d{11}", x))).all():
+            st.error("All matric numbers must be exactly 11 digits.")
+            return
+
+        edited_df["Full Name"] = edited_df["Full Name"].astype(str).str.strip()
+        edited_df["Matric No"] = matrics
+        save_data(edited_df)
+        st.success("Attendance updated successfully")
+
+    st.divider()
+    st.download_button("Download CSV", data=df.to_csv(index=False), file_name="attendance.csv", mime="text/csv")
+    if st.button("Reset Attendance"):
+        save_data(pd.DataFrame(columns=COLUMNS))
+        st.success("Attendance list has been reset")
+
+# ---------------- App Router ----------------
+def main():
+    st.sidebar.title("Navigation")
+    page = st.sidebar.selectbox("Go to", ["Attendance", "Course Rep"])
+
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+
+    if page == "Attendance":
+        attendance_page()
+    else:
+        if not st.session_state.logged_in:
+            rep_login_page()
+        else:
+            rep_dashboard()
+
+if __name__ == "__main__":
+    main()
