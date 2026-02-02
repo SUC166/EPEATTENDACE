@@ -5,13 +5,12 @@ from datetime import datetime
 
 ATTENDANCE_FILE = "attendance.csv"
 
----------- Helpers ----------
 
 def load_data(): if os.path.exists(ATTENDANCE_FILE): return pd.read_csv(ATTENDANCE_FILE) return pd.DataFrame(columns=["Full Name", "Matric No", "Time"])
 
 def save_data(df): df.to_csv(ATTENDANCE_FILE, index=False)
 
----------- Pages ----------
+
 
 def attendance_page(): st.title("EPE 100LVL Attendance")
 
@@ -75,7 +74,6 @@ if st.button("Reset Attendance"):
     save_data(pd.DataFrame(columns=["Full Name", "Matric No", "Time"]))
     st.success("Attendance list has been reset")
 
----------- App Router ----------
 
 def main(): st.sidebar.title("Navigation") page = st.sidebar.selectbox("Go to", ["Attendance", "Course Rep"])
 
