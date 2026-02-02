@@ -5,9 +5,6 @@ import re
 import hashlib
 from datetime import datetime
 import qrcode
-import numpy as np
-import cv2
-from pyzbar.pyzbar import decode
 
 # ---------------- CONFIG ----------------
 SESSIONS_FILE = "attendance_sessions.csv"
@@ -38,7 +35,7 @@ def save_records(df):
 
 def get_device_id():
     if "device_id" not in st.session_state:
-        raw = f"{st.session_state}{datetime.now().date()}"
+        raw = f"{st.session_state}_{datetime.now().date()}"
         st.session_state.device_id = hashlib.sha256(raw.encode()).hexdigest()
     return st.session_state.device_id
 
@@ -50,55 +47,37 @@ def generate_attendance_id(att_type, title):
 
     if att_type == "Per Subject":
         return f"{date}_{title}_{time}"
-    else:
-        return f"{day}_{date}_{time}"
+    return f"{day}_{date}_{time}"
 
 def generate_qr(attendance_id):
-    img = qrcode.make(attendance_id)
+    url = f"?attendance_id={attendance_id}"
+    img = qrcode.make(url)
     path = f"qr_{attendance_id}.png"
     img.save(path)
     return path
 
-# ---------------- QR SCANNER ----------------
-def scan_qr():
-    st.subheader("Scan Attendance QR Code")
-    img = st.camera_input("Point camera at QR code")
-
-    if img:
-        image = np.array(img)
-        decoded = decode(image)
-
-        if not decoded:
-            st.error("No QR code detected. Try again.")
-            return None
-
-        return decoded[0].data.decode("utf-8")
-
-    return None
-
 # ---------------- STUDENT PAGE ----------------
 def student_page():
-    st.title("Student Attendance")
+    params = st.query_params
+    attendance_id = params.get("attendance_id")
 
-    qr_data = scan_qr()
-    if not qr_data:
-        st.info("Scan the QR code to continue.")
+    if not attendance_id:
+        st.info("Scan the QR code displayed in class.")
         return
 
-    attendance_id = qr_data.strip()
     sessions = load_sessions()
     session = sessions[sessions["attendance_id"] == attendance_id]
 
     if session.empty:
-        st.error("Invalid attendance QR.")
+        st.error("Invalid attendance QR code.")
         return
 
     if session.iloc[0]["status"] != "Active":
         st.error("Attendance has been closed.")
         return
 
-    st.success("Attendance validated")
     st.title(session.iloc[0]["title"])
+    st.caption("Attendance is active")
 
     name = st.text_input("Full Name")
     matric = st.text_input("Matric Number (11 digits)")
@@ -108,7 +87,7 @@ def student_page():
         matric = matric.strip()
 
         if not name or not matric:
-            st.error("All fields required.")
+            st.error("All fields are required.")
             return
 
         if not re.fullmatch(r"\d{11}", matric):
@@ -137,7 +116,7 @@ def student_page():
         save_records(pd.concat([records, pd.DataFrame([new])], ignore_index=True))
         st.success("Attendance recorded successfully.")
 
-    st.subheader("Current Attendance")
+    st.subheader("Current Attendance List")
     records = load_records()
     st.dataframe(
         records[records["attendance_id"] == attendance_id][
@@ -149,6 +128,7 @@ def student_page():
 # ---------------- COURSE REP LOGIN ----------------
 def rep_login():
     st.title("Course Rep Login")
+
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
