@@ -14,7 +14,7 @@ APP_BASE_URL = "https://epeattendance.streamlit.app"  # CHANGE IF NEEDED
 SESSIONS_FILE = "attendance_sessions.csv"
 RECORDS_FILE = "attendance_records.csv"
 
-# NEW: rotating QR tokens
+# Rotating QR tokens
 TOKENS_FILE = "attendance_tokens.csv"
 TOKEN_VALIDITY_SECONDS = 11
 
@@ -63,7 +63,8 @@ def generate_attendance_id(att_type, title):
     day = now.strftime("%A")
 
     if att_type == "Per Subject":
-        return f"{date}_{title}_{time_str}"
+        safe_title = title.replace(" ", "_").strip()
+        return f"{date}_{safe_title}_{time_str}"
     return f"{day}_{date}_{time_str}"
 
 def generate_token():
@@ -113,6 +114,16 @@ def create_rotating_qr(attendance_id):
     img.save(path)
     return path
 
+def is_valid_token(attendance_id, token):
+    tokens = load_tokens()
+    tokens = cleanup_old_tokens(tokens)
+
+    valid = tokens[
+        (tokens["attendance_id"] == attendance_id) &
+        (tokens["token"] == token)
+    ]
+    return not valid.empty
+
 # ---------------- STUDENT PAGE ----------------
 def student_page():
     params = st.query_params
@@ -139,15 +150,7 @@ def student_page():
         return
 
     # Validate rotating token
-    tokens = load_tokens()
-    tokens = cleanup_old_tokens(tokens)
-
-    valid = tokens[
-        (tokens["attendance_id"] == attendance_id) &
-        (tokens["token"] == token)
-    ]
-
-    if valid.empty:
+    if not is_valid_token(attendance_id, token):
         st.error("QR code expired. Please scan the latest QR code in class.")
         return
 
@@ -172,7 +175,7 @@ def student_page():
         records = load_records()
         device_id = get_device_id()
 
-        # IMPORTANT: check duplicates only inside this attendance_id
+        # Check duplicates only within this attendance session
         this_session = records[records["attendance_id"] == attendance_id]
 
         if device_id in this_session["device_id"].values:
@@ -220,6 +223,7 @@ def rep_login():
 def rep_dashboard():
     st.title("Course Rep Dashboard")
 
+    # --- Create Attendance ---
     st.subheader("Create Attendance")
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
     title = "Daily Attendance"
@@ -252,6 +256,7 @@ def rep_dashboard():
 
     st.divider()
 
+    # --- Select Active Attendance ---
     sessions = load_sessions()
     active = sessions[sessions["status"] == "Active"]
 
@@ -261,22 +266,135 @@ def rep_dashboard():
 
     attendance_id = st.selectbox("Active Attendance", active["attendance_id"])
 
-    # ---- LIVE ROTATING QR ----
+    # ---------------- ROTATING QR (NON-BLOCKING) ----------------
     st.subheader("Live QR Code (changes every 11 seconds)")
     st.caption("Students must scan the latest QR code. Old links expire automatically.")
 
-    qr_placeholder = st.empty()
+    if "last_qr_time" not in st.session_state:
+        st.session_state.last_qr_time = 0
 
-    # Generate and show QR, then auto-refresh every 11 seconds
-    qr_path = create_rotating_qr(attendance_id)
-    qr_placeholder.image(qr_path, caption="Scan quickly (valid for 11 seconds)")
+    if "current_qr_path" not in st.session_state:
+        st.session_state.current_qr_path = None
 
-    st.info("QR refreshes automatically every 11 seconds.")
-    time.sleep(11)
-    st.rerun()
+    now = time.time()
+    if (now - st.session_state.last_qr_time) >= TOKEN_VALIDITY_SECONDS or st.session_state.current_qr_path is None:
+        st.session_state.current_qr_path = create_rotating_qr(attendance_id)
+        st.session_state.last_qr_time = now
 
-    # ---- These won't run because of rerun above, but kept for structure ----
-    # If you want these buttons, tell me and I'll restructure without blocking loop.
+    st.image(st.session_state.current_qr_path, caption="Valid for 11 seconds")
+
+    # Auto-refresh the page every 11 seconds without blocking buttons
+    st.markdown(
+        f"""
+        <script>
+        setTimeout(function(){{
+            window.location.reload();
+        }}, {TOKEN_VALIDITY_SECONDS * 1000});
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.divider()
+
+    # ---------------- REP ACTIONS ----------------
+    st.subheader("Rep Actions")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("End Attendance", type="primary"):
+            sessions = load_sessions()
+            sessions.loc[sessions["attendance_id"] == attendance_id, "status"] = "Ended"
+            save_sessions(sessions)
+            st.success("Attendance ended. QR code is now invalid.")
+            st.rerun()
+
+    with col2:
+        if st.button("Refresh List"):
+            st.rerun()
+
+    st.divider()
+
+    # ---------------- VIEW CURRENT LIST ----------------
+    st.subheader("Current Attendance List (Rep View)")
+    records = load_records()
+    this_session = records[records["attendance_id"] == attendance_id].copy()
+
+    if this_session.empty:
+        st.info("No students have marked attendance yet.")
+    else:
+        st.dataframe(
+            this_session[["full_name", "matric", "time", "device_id"]],
+            use_container_width=True
+        )
+
+    st.divider()
+
+    # ---------------- MANUAL ADD ----------------
+    st.subheader("Add Student Manually (Rep Only)")
+    m_name = st.text_input("Student Full Name", key="manual_name")
+    m_matric = st.text_input("Student Matric Number (11 digits)", key="manual_matric")
+
+    if st.button("Add Student"):
+        m_name = m_name.strip()
+        m_matric = m_matric.strip()
+
+        if not m_name or not m_matric:
+            st.error("Name and matric number are required.")
+            return
+
+        if not re.fullmatch(r"\d{11}", m_matric):
+            st.error("Matric number must be exactly 11 digits.")
+            return
+
+        records = load_records()
+        this_session = records[records["attendance_id"] == attendance_id]
+
+        if m_matric in this_session["matric"].values:
+            st.error("That matric number is already recorded for this attendance.")
+            return
+
+        new = {
+            "attendance_id": attendance_id,
+            "full_name": m_name,
+            "matric": m_matric,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "device_id": "MANUAL_REP"
+        }
+
+        save_records(pd.concat([records, pd.DataFrame([new])], ignore_index=True))
+        st.success("Student added successfully.")
+        st.rerun()
+
+    st.divider()
+
+    # ---------------- DELETE STUDENT ----------------
+    st.subheader("Delete Student From List (Rep Only)")
+    del_matric = st.text_input("Enter Matric Number to Delete", key="delete_matric")
+
+    if st.button("Delete Student"):
+        del_matric = del_matric.strip()
+
+        if not re.fullmatch(r"\d{11}", del_matric):
+            st.error("Matric number must be exactly 11 digits.")
+            return
+
+        records = load_records()
+        before = len(records)
+
+        # delete only within selected attendance
+        records = records[~((records["attendance_id"] == attendance_id) & (records["matric"] == del_matric))]
+
+        after = len(records)
+
+        if before == after:
+            st.error("No student with that matric number was found in this attendance list.")
+            return
+
+        save_records(records)
+        st.success("Student deleted successfully.")
+        st.rerun()
 
 # ---------------- ROUTER ----------------
 def main():
