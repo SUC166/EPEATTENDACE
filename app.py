@@ -1,21 +1,16 @@
 import streamlit as st
 import pandas as pd
-import os
-import re
-import hashlib
-import secrets
-import time
+import os, re, time, secrets, hashlib
 from datetime import datetime
 import qrcode
 from streamlit_autorefresh import st_autorefresh
 
 APP_URL = "https://epeattendance.streamlit.app"
+TOKEN_LIFETIME = 11
 
 SESSIONS_FILE = "sessions.csv"
 RECORDS_FILE = "records.csv"
 TOKENS_FILE = "tokens.csv"
-
-TOKEN_LIFETIME = 30
 
 REP_USERNAME = "rep"
 REP_PASSWORD = "epe100"
@@ -25,9 +20,7 @@ RECORD_COLS = ["session_id", "name", "matric", "time", "device_id"]
 TOKEN_COLS = ["session_id", "token", "created_at"]
 
 def load_csv(file, cols):
-    if os.path.exists(file):
-        return pd.read_csv(file)
-    return pd.DataFrame(columns=cols)
+    return pd.read_csv(file) if os.path.exists(file) else pd.DataFrame(columns=cols)
 
 def save_csv(df, file):
     df.to_csv(file, index=False)
@@ -35,30 +28,29 @@ def save_csv(df, file):
 def normalize(txt):
     return re.sub(r"\s+", " ", str(txt).strip()).lower()
 
-def wat_now():
+def now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-def get_device_id():
+
+def device_id():
     if "device_id" not in st.session_state:
-        raw = f"{st.session_state}{time.time()}"
+        raw = f"{time.time()}{secrets.token_hex()}"
         st.session_state.device_id = hashlib.sha256(raw.encode()).hexdigest()
     return st.session_state.device_id
 
-def generate_session_title(att_type, course=""):
-    now = datetime.now()
-    day = now.strftime("%A")
-    date = now.strftime("%Y-%m-%d")
-    time_ = now.strftime("%H:%M")
-    if att_type == "Daily":
-        return f"{day} {date} {time_}"
-    return f"{day} {course} {date} {time_}"
+def session_title(att_type, course=""):
+    d = datetime.now()
+    day = d.strftime("%A")
+    date = d.strftime("%Y-%m-%d")
+    t = d.strftime("%H:%M")
+    return f"{day} {course} {date} {t}" if att_type == "Per Subject" else f"{day} {date} {t}"
 
-def generate_token():
+def gen_token():
     return secrets.token_urlsafe(16)
 
 def create_qr(session_id):
     tokens = load_csv(TOKENS_FILE, TOKEN_COLS)
-    token = generate_token()
-    tokens.loc[len(tokens)] = [session_id, token, wat_now()]
+    token = gen_token()
+    tokens.loc[len(tokens)] = [session_id, token, now()]
     save_csv(tokens, TOKENS_FILE)
 
     url = f"{APP_URL}/?session_id={session_id}&token={token}"
@@ -69,53 +61,50 @@ def create_qr(session_id):
 
 def token_valid(session_id, token):
     tokens = load_csv(TOKENS_FILE, TOKEN_COLS)
-    if tokens.empty:
-        return False
-
+    if tokens.empty: return False
     tokens["created_at"] = pd.to_datetime(tokens["created_at"])
-    now = datetime.now()
+    age = (datetime.now() - tokens["created_at"]).dt.total_seconds()
 
     valid = tokens[
         (tokens["session_id"] == session_id) &
         (tokens["token"] == token) &
-        ((now - tokens["created_at"]).dt.total_seconds() <= TOKEN_LIFETIME)
+        (age <= TOKEN_LIFETIME)
     ]
     return not valid.empty
 
 def rotating_qr(session_id):
-    if "last_qr_time" not in st.session_state:
-        st.session_state.last_qr_time = 0
+    if "qr_time" not in st.session_state:
+        st.session_state.qr_time = 0
         st.session_state.qr_path = None
 
-    now = time.time()
-    elapsed = now - st.session_state.last_qr_time
+    elapsed = time.time() - st.session_state.qr_time
 
     if elapsed >= TOKEN_LIFETIME:
         st.session_state.qr_path = create_qr(session_id)
-        st.session_state.last_qr_time = now
+        st.session_state.qr_time = time.time()
         elapsed = 0
 
-    remaining = max(0, int(TOKEN_LIFETIME - elapsed))
-    return st.session_state.qr_path, remaining
+    return st.session_state.qr_path, int(TOKEN_LIFETIME - elapsed)
 
+# ================= STUDENT =================
 def student_page():
     q = st.query_params
     session_id = q.get("session_id")
     token = q.get("token")
 
     if not session_id or not token:
-        st.info("Scan the QR code displayed in class.")
+        st.info("Scan QR in class.")
         return
 
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     session = sessions[sessions["session_id"] == session_id]
 
     if session.empty or session.iloc[0]["status"] != "Active":
-        st.error("Attendance not active.")
+        st.error("Attendance closed.")
         return
 
     if not token_valid(session_id, token):
-        st.error("QR expired. Scan again.")
+        st.error("QR expired. Rescan.")
         return
 
     st.title(session.iloc[0]["title"])
@@ -123,7 +112,7 @@ def student_page():
     name = st.text_input("Full Name")
     matric = st.text_input("Matric Number (11 digits)")
 
-    if st.button("Submit Attendance"):
+    if st.button("Submit"):
         if not re.fullmatch(r"\d{11}", matric):
             st.error("Invalid matric number.")
             return
@@ -131,97 +120,87 @@ def student_page():
         records = load_csv(RECORDS_FILE, RECORD_COLS)
 
         if normalize(name) in records["name"].apply(normalize).values:
-            st.error("This name has already been recorded.")
+            st.error("Name already exists.")
             return
 
         if matric in records["matric"].values:
-            st.error("This matric number has already been used.")
+            st.error("Matric already used.")
             return
 
-        device = get_device_id()
-        if device in records[records["session_id"] == session_id]["device_id"].values:
-            st.error("One entry per device only.")
+        dev = device_id()
+        if dev in records[records["session_id"] == session_id]["device_id"].values:
+            st.error("One entry per device.")
             return
 
-        records.loc[len(records)] = [
-            session_id, name, matric, wat_now(), device
-        ]
+        records.loc[len(records)] = [session_id, name, matric, now(), dev]
         save_csv(records, RECORDS_FILE)
-        st.success("Attendance recorded successfully.")
+        st.success("Attendance recorded.")
 
+# ================= REP LOGIN =================
 def rep_login():
     st.title("Course Rep Login")
 
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
+    u = st.text_input("Username")
+    p = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if username == REP_USERNAME and password == REP_PASSWORD:
+        if u == REP_USERNAME and p == REP_PASSWORD:
             st.session_state.rep = True
             st.rerun()
         else:
-            st.error("Invalid login details")
+            st.error("Wrong login")
 
+# ================= REP DASHBOARD =================
 def rep_dashboard():
     st_autorefresh(interval=1000, key="qr_refresh")
 
     st.title("Course Rep Dashboard")
 
-    st.subheader("Start Attendance Session")
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
-
-    course = ""
-    if att_type == "Per Subject":
-        course = st.text_input("Course Code")
+    course = st.text_input("Course Code") if att_type == "Per Subject" else ""
 
     if st.button("Start Session"):
         sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
-        session_id = str(time.time())
-        title = generate_session_title(att_type, course)
+        sid = str(time.time())
+        title = session_title(att_type, course)
 
-        sessions.loc[len(sessions)] = [
-            session_id, att_type, title, "Active", wat_now()
-        ]
+        sessions.loc[len(sessions)] = [sid, att_type, title, "Active", now()]
         save_csv(sessions, SESSIONS_FILE)
-        st.success("Attendance started.")
+        st.success("Session started.")
         st.rerun()
 
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     if sessions.empty:
         return
 
-    session_id = st.selectbox(
-        "Select Attendance Session",
+    sid = st.selectbox(
+        "Select Session",
         sessions["session_id"],
         format_func=lambda x: sessions[sessions["session_id"] == x]["title"].iloc[0]
     )
 
-    session = sessions[sessions["session_id"] == session_id].iloc[0]
+    session = sessions[sessions["session_id"] == sid].iloc[0]
     records = load_csv(RECORDS_FILE, RECORD_COLS)
-    session_records = records[records["session_id"] == session_id]
+    data = records[records["session_id"] == sid]
 
     st.subheader("Attendance Records")
 
-    if not session_records.empty:
-        st.dataframe(
-            session_records[["name", "matric", "time"]],
-            use_container_width=True
-        )
+    if not data.empty:
+        st.dataframe(data[["name", "matric", "time"]])
 
     st.download_button(
         "Download CSV",
-        data=session_records[["name", "matric", "time"]].to_csv(index=False),
-        file_name=f"{session['title']}.csv",
-        mime="text/csv"
+        data=data[["name", "matric", "time"]].to_csv(index=False),
+        file_name=f"{session['title']}.csv"
     )
 
     if session["status"] == "Active":
-        st.divider()
-        st.subheader("Live QR Code")
-        qr, remaining = rotating_qr(session_id)
+        st.subheader("Live QR")
+        qr, remaining = rotating_qr(sid)
         if qr:
-            st.image(qr, caption=f"Refreshing in {remaining} seconds")
+            st.image(qr, caption=f"Refresh in {remaining}s")
 
+# ================= MAIN =================
 def main():
     if "rep" not in st.session_state:
         st.session_state.rep = False
@@ -231,10 +210,7 @@ def main():
     if page == "Student":
         student_page()
     else:
-        if not st.session_state.rep:
-            rep_login()
-        else:
-            rep_dashboard()
+        rep_login() if not st.session_state.rep else rep_dashboard()
 
 if __name__ == "__main__":
     main()
