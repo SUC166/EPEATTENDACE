@@ -9,7 +9,7 @@ from datetime import datetime
 import qrcode
 
 # ================= CONFIG =================
-APP_URL = "https://your-app-name.streamlit.app"  # CHANGE AFTER DEPLOY
+APP_URL = "https://epeattendance.streamlit.app"  # CHANGE AFTER DEPLOY
 
 SESSIONS_FILE = "sessions.csv"
 RECORDS_FILE = "records.csv"
@@ -84,7 +84,6 @@ def token_valid(session_id, token):
     ]
     return not valid.empty
 
-# ================= QR ROTATION (SAFE) =================
 def rotating_qr(session_id):
     if "last_qr_time" not in st.session_state:
         st.session_state.last_qr_time = 0
@@ -210,31 +209,65 @@ def rep_dashboard():
         qr, remaining = rotating_qr(session_id)
         if qr:
             st.image(qr, caption=f"Refreshing in {remaining} seconds")
-        time.sleep(1)
-        st.rerun()
 
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     session_records = records[records["session_id"] == session_id]
 
     st.subheader("Attendance Records")
-    edited = st.data_editor(session_records, use_container_width=True)
 
-    if st.button("Save Changes"):
-        records = records[records["session_id"] != session_id]
-        records = pd.concat([records, edited], ignore_index=True)
-        save_csv(records, RECORDS_FILE)
-        st.success("Records updated.")
-        st.rerun()
+    if session_records.empty:
+        st.info("No attendance recorded yet.")
+    else:
+        edited = st.data_editor(
+            session_records,
+            use_container_width=True,
+            num_rows="fixed"
+        )
 
-    st.download_button(
-        "Download CSV",
-        data=edited.to_csv(index=False),
-        file_name=f"{session['title']}.csv",
-        mime="text/csv"
-    )
+        if st.button("Save Changes"):
+            records = records[records["session_id"] != session_id]
+            records = pd.concat([records, edited], ignore_index=True)
+            save_csv(records, RECORDS_FILE)
+            st.success("Attendance updated.")
+            st.rerun()
 
-    if st.button("End Attendance"):
-        sessions.loc[sessions["session_id"] == session_id, "status"] = "Ended"
+    st.subheader("Manual Add Student")
+    m_name = st.text_input("Student Name")
+    m_matric = st.text_input("Matric Number")
+
+    if st.button("Add Student"):
+        if not re.fullmatch(r"\d{11}", m_matric):
+            st.error("Invalid matric.")
+        elif m_matric in session_records["matric"].values:
+            st.error("Matric already exists.")
+        else:
+            records.loc[len(records)] = [
+                session_id, m_name, m_matric, wat_now(), "REP_MANUAL"
+            ]
+            save_csv(records, RECORDS_FILE)
+            st.success("Student added.")
+            st.rerun()
+
+    st.subheader("Delete Student")
+    del_matric = st.text_input("Matric Number to Delete")
+
+    if st.button("Delete Student"):
+        before = len(records)
+        records = records[
+            ~((records["session_id"] == session_id) &
+              (records["matric"] == del_matric))
+        ]
+        if len(records) == before:
+            st.error("Student not found.")
+        else:
+            save_csv(records, RECORDS_FILE)
+            st.success("Student removed.")
+            st.rerun()
+
+    if st.button("End Attendance Session", type="primary"):
+        sessions.loc[
+            sessions["session_id"] == session_id, "status"
+        ] = "Ended"
         save_csv(sessions, SESSIONS_FILE)
         st.success("Attendance ended.")
         st.rerun()
