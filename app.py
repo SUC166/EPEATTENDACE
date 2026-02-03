@@ -45,7 +45,8 @@ def session_title(att_type, course=""):
 def gen_code():
     return f"{secrets.randbelow(10000):04d}"
 
-def create_code(session_id):
+# ===== CODE STORAGE =====
+def write_new_code(session_id):
     codes = load_csv(CODES_FILE, CODE_COLS)
     code = gen_code()
     codes.loc[len(codes)] = [session_id, code, now()]
@@ -64,27 +65,27 @@ def get_latest_code(session_id):
     codes["created_at"] = pd.to_datetime(codes["created_at"])
     return codes.sort_values("created_at").iloc[-1]
 
-def code_valid(session_id, input_code):
+def code_valid(session_id, entered_code):
     latest = get_latest_code(session_id)
     if latest is None:
         return False
 
     age = (datetime.now() - latest["created_at"]).total_seconds()
-    return latest["code"] == input_code and age <= TOKEN_LIFETIME
+    return entered_code == latest["code"] and age <= TOKEN_LIFETIME
 
-def rotating_code(session_id):
-    if "code_time" not in st.session_state:
-        st.session_state.code_time = 0
-        st.session_state.live_code = None
+# ===== REP LIVE CODE ROTATION =====
+def rep_live_code(session_id):
+    latest = get_latest_code(session_id)
 
-    elapsed = time.time() - st.session_state.code_time
+    if latest is None:
+        return write_new_code(session_id), TOKEN_LIFETIME
 
-    if elapsed >= TOKEN_LIFETIME:
-        st.session_state.live_code = create_code(session_id)
-        st.session_state.code_time = time.time()
-        elapsed = 0
+    age = (datetime.now() - latest["created_at"]).total_seconds()
 
-    return st.session_state.live_code, int(TOKEN_LIFETIME - elapsed)
+    if age >= TOKEN_LIFETIME:
+        return write_new_code(session_id), TOKEN_LIFETIME
+
+    return latest["code"], int(TOKEN_LIFETIME - age)
 
 # ================= STUDENT =================
 def student_page():
@@ -103,10 +104,10 @@ def student_page():
 
     if st.session_state.active_session != sid:
         st.title("Enter Attendance Code")
-        code = st.text_input("4-Digit Live Code")
+        entered = st.text_input("4-Digit Live Code")
 
         if st.button("Continue"):
-            if not code_valid(sid, code):
+            if not code_valid(sid, entered):
                 st.error("Invalid or expired code.")
                 return
 
@@ -175,6 +176,9 @@ def rep_dashboard():
 
         sessions.loc[len(sessions)] = [sid, att_type, title, "Active", now()]
         save_csv(sessions, SESSIONS_FILE)
+
+        write_new_code(sid)
+
         st.success("Attendance started.")
         st.rerun()
 
@@ -189,13 +193,14 @@ def rep_dashboard():
     )
 
     session = sessions[sessions["session_id"] == sid].iloc[0]
+
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     data = records[records["session_id"] == sid]
 
     st.subheader("Live Attendance Code")
 
     if session["status"] == "Active":
-        code, remaining = rotating_code(sid)
+        code, remaining = rep_live_code(sid)
         st.markdown(f"## `{code}`")
         st.caption(f"Changes in {remaining} seconds")
 
