@@ -8,13 +8,15 @@ import time
 from datetime import datetime
 import qrcode
 
-# ---------------- FILES ----------------
+# ================== CONFIG ==================
+APP_URL = "https://your-app-name.streamlit.app"  # CHANGE AFTER DEPLOY
+
 SESSIONS_FILE = "sessions.csv"
 RECORDS_FILE = "records.csv"
 TOKENS_FILE = "tokens.csv"
 
-# ---------------- CONSTANTS ----------------
-TOKEN_VALIDITY = 11
+TOKEN_LIFETIME = 11
+
 REP_USERNAME = "rep"
 REP_PASSWORD = "epe100"
 
@@ -22,9 +24,7 @@ SESSION_COLS = ["session_id", "type", "title", "status", "created_at"]
 RECORD_COLS = ["session_id", "name", "matric", "time", "device_id"]
 TOKEN_COLS = ["session_id", "token", "created_at"]
 
-APP_URL = "https://your-app-name.streamlit.app"  # change later
-
-# ---------------- HELPERS ----------------
+# ================== HELPERS ==================
 def load_csv(file, cols):
     if os.path.exists(file):
         return pd.read_csv(file)
@@ -33,19 +33,19 @@ def load_csv(file, cols):
 def save_csv(df, file):
     df.to_csv(file, index=False)
 
-def normalize(text):
-    return re.sub(r"\s+", " ", str(text).strip()).lower()
-
-def get_device_id():
-    if "device_id" not in st.session_state:
-        raw = f"{st.session_state}_{time.time()}"
-        st.session_state.device_id = hashlib.sha256(raw.encode()).hexdigest()
-    return st.session_state.device_id
+def normalize(txt):
+    return re.sub(r"\s+", " ", str(txt).strip()).lower()
 
 def wat_now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def generate_session_name(att_type, title=""):
+def get_device_id():
+    if "device_id" not in st.session_state:
+        raw = f"{st.session_state}{time.time()}"
+        st.session_state.device_id = hashlib.sha256(raw.encode()).hexdigest()
+    return st.session_state.device_id
+
+def generate_session_title(att_type, course=""):
     now = datetime.now()
     day = now.strftime("%A")
     date = now.strftime("%Y-%m-%d")
@@ -53,7 +53,7 @@ def generate_session_name(att_type, title=""):
 
     if att_type == "Daily":
         return f"{day} {date} {time_}"
-    return f"{day} {title} {date} {time_}"
+    return f"{day} {course} {date} {time_}"
 
 def generate_token():
     return secrets.token_urlsafe(16)
@@ -70,7 +70,7 @@ def create_qr(session_id):
     img.save(path)
     return path
 
-def valid_token(session_id, token):
+def token_valid(session_id, token):
     tokens = load_csv(TOKENS_FILE, TOKEN_COLS)
     if tokens.empty:
         return False
@@ -81,28 +81,52 @@ def valid_token(session_id, token):
     valid = tokens[
         (tokens["session_id"] == session_id) &
         (tokens["token"] == token) &
-        ((now - tokens["created_at"]).dt.total_seconds() <= TOKEN_VALIDITY)
+        ((now - tokens["created_at"]).dt.total_seconds() <= TOKEN_LIFETIME)
     ]
     return not valid.empty
-    # ---------------- STUDENT PAGE ----------------
+
+# ================== LIVE QR (NO RELOAD) ==================
+def live_qr(session_id):
+    qr_box = st.empty()
+    timer_box = st.empty()
+
+    while True:
+        sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
+        status = sessions.loc[
+            sessions["session_id"] == session_id, "status"
+        ].values[0]
+
+        if status != "Active":
+            qr_box.empty()
+            timer_box.info("Attendance ended.")
+            break
+
+        qr = create_qr(session_id)
+        qr_box.image(qr, caption="QR refreshes every 11 seconds")
+
+        for i in range(TOKEN_LIFETIME, 0, -1):
+            timer_box.caption(f"Refreshing in {i} seconds…")
+            time.sleep(1)
+
+# ================== STUDENT PAGE ==================
 def student_page():
     q = st.query_params
     session_id = q.get("session_id")
     token = q.get("token")
 
     if not session_id or not token:
-        st.info("Scan the QR code in class to mark attendance.")
+        st.info("Scan the QR code displayed in class.")
         return
 
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     session = sessions[sessions["session_id"] == session_id]
 
     if session.empty or session.iloc[0]["status"] != "Active":
-        st.error("Attendance is closed.")
+        st.error("Attendance not active.")
         return
 
-    if not valid_token(session_id, token):
-        st.error("QR code expired. Scan again.")
+    if not token_valid(session_id, token):
+        st.error("QR expired. Scan again.")
         return
 
     st.title(session.iloc[0]["title"])
@@ -110,18 +134,17 @@ def student_page():
     name = st.text_input("Full Name")
     matric = st.text_input("Matric Number (11 digits)")
 
-    if st.button("Submit Attendance"):
+    if st.button("Submit"):
         if not re.fullmatch(r"\d{11}", matric):
             st.error("Invalid matric number.")
             return
 
         records = load_csv(RECORDS_FILE, RECORD_COLS)
         device = get_device_id()
-
         session_records = records[records["session_id"] == session_id]
 
         if device in session_records["device_id"].values:
-            st.error("This device has already submitted.")
+            st.error("One entry per device only.")
             return
 
         if matric in session_records["matric"].values:
@@ -138,7 +161,7 @@ def student_page():
         save_csv(records, RECORDS_FILE)
         st.success("Attendance recorded successfully.")
 
-# ---------------- REP LOGIN ----------------
+# ================== REP LOGIN ==================
 def rep_login():
     st.title("Course Rep Login")
     u = st.text_input("Username")
@@ -151,70 +174,59 @@ def rep_login():
         else:
             st.error("Invalid credentials")
 
-# ---------------- SESSION CREATION ----------------
-def create_session():
-    st.subheader("Create Attendance Session")
+# ================== REP DASHBOARD ==================
+def rep_dashboard():
+    st.title("Course Rep Dashboard")
+
+    st.subheader("Start Attendance Session")
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
-
-    title = ""
+    course = ""
     if att_type == "Per Subject":
-        title = st.text_input("Course Code (e.g FRN101)")
+        course = st.text_input("Course Code (e.g FRN101)")
 
-    if st.button("Start Attendance"):
-        if att_type == "Per Subject" and not title:
+    if st.button("Start Session"):
+        if att_type == "Per Subject" and not course:
             st.error("Course code required.")
             return
 
         sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
-        session_id = f"{time.time()}"
-        name = generate_session_name(att_type, title)
+        session_id = str(time.time())
+        title = generate_session_title(att_type, course)
 
         sessions.loc[len(sessions)] = [
-            session_id, att_type, name, "Active", wat_now()
+            session_id, att_type, title, "Active", wat_now()
         ]
         save_csv(sessions, SESSIONS_FILE)
-        st.success("Attendance session started.")
+        st.success("Attendance started.")
         st.rerun()
-        # ---------------- REP DASHBOARD ----------------
-def rep_dashboard():
-    st.title("Course Rep Dashboard")
 
-    create_session()
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
-
     if sessions.empty:
-        st.info("No sessions yet.")
         return
 
     session_id = st.selectbox(
-        "Select Attendance Session",
+        "Select Session",
         sessions["session_id"],
         format_func=lambda x: sessions[sessions["session_id"] == x]["title"].iloc[0]
     )
 
     session = sessions[sessions["session_id"] == session_id].iloc[0]
 
-    # QR rotation
     if session["status"] == "Active":
-        if "qr_time" not in st.session_state or time.time() - st.session_state.qr_time > TOKEN_VALIDITY:
-            st.session_state.qr_path = create_qr(session_id)
-            st.session_state.qr_time = time.time()
-
-        st.image(st.session_state.qr_path, caption="QR code refreshes every 11 seconds")
-        st.markdown(f"<meta http-equiv='refresh' content='{TOKEN_VALIDITY}'>", unsafe_allow_html=True)
+        st.subheader("Live QR Code")
+        live_qr(session_id)
 
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     session_records = records[records["session_id"] == session_id]
 
     st.subheader("Attendance Records")
-    edited = st.data_editor(session_records, num_rows="fixed", use_container_width=True)
+    edited = st.data_editor(session_records, use_container_width=True)
 
-    if st.button("Save Edits"):
-        # Remove old records for session
+    if st.button("Save Changes"):
         records = records[records["session_id"] != session_id]
         records = pd.concat([records, edited], ignore_index=True)
         save_csv(records, RECORDS_FILE)
-        st.success("Changes saved.")
+        st.success("Records updated.")
         st.rerun()
 
     st.download_button(
@@ -224,13 +236,13 @@ def rep_dashboard():
         mime="text/csv"
     )
 
-    if st.button("End Attendance Session"):
+    if st.button("End Attendance"):
         sessions.loc[sessions["session_id"] == session_id, "status"] = "Ended"
         save_csv(sessions, SESSIONS_FILE)
         st.success("Attendance ended.")
         st.rerun()
 
-# ---------------- ROUTER ----------------
+# ================== ROUTER ==================
 def main():
     if "rep" not in st.session_state:
         st.session_state.rep = False
