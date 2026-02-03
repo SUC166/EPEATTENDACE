@@ -4,7 +4,7 @@ import os, re, time, secrets, hashlib
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
-TOKEN_LIFETIME = 11
+TOKEN_LIFETIME = 20
 
 SESSIONS_FILE = "sessions.csv"
 RECORDS_FILE = "records.csv"
