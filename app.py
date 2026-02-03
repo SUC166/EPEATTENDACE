@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 import qrcode
 
-# ================== CONFIG ==================
+# ================= CONFIG =================
 APP_URL = "https://your-app-name.streamlit.app"  # CHANGE AFTER DEPLOY
 
 SESSIONS_FILE = "sessions.csv"
@@ -24,7 +24,7 @@ SESSION_COLS = ["session_id", "type", "title", "status", "created_at"]
 RECORD_COLS = ["session_id", "name", "matric", "time", "device_id"]
 TOKEN_COLS = ["session_id", "token", "created_at"]
 
-# ================== HELPERS ==================
+# ================= HELPERS =================
 def load_csv(file, cols):
     if os.path.exists(file):
         return pd.read_csv(file)
@@ -50,7 +50,6 @@ def generate_session_title(att_type, course=""):
     day = now.strftime("%A")
     date = now.strftime("%Y-%m-%d")
     time_ = now.strftime("%H:%M")
-
     if att_type == "Daily":
         return f"{day} {date} {time_}"
     return f"{day} {course} {date} {time_}"
@@ -85,30 +84,24 @@ def token_valid(session_id, token):
     ]
     return not valid.empty
 
-# ================== LIVE QR (NO RELOAD) ==================
-def live_qr(session_id):
-    qr_box = st.empty()
-    timer_box = st.empty()
+# ================= QR ROTATION (SAFE) =================
+def rotating_qr(session_id):
+    if "last_qr_time" not in st.session_state:
+        st.session_state.last_qr_time = 0
+        st.session_state.qr_path = None
 
-    while True:
-        sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
-        status = sessions.loc[
-            sessions["session_id"] == session_id, "status"
-        ].values[0]
+    now = time.time()
+    elapsed = now - st.session_state.last_qr_time
 
-        if status != "Active":
-            qr_box.empty()
-            timer_box.info("Attendance ended.")
-            break
+    if elapsed >= TOKEN_LIFETIME:
+        st.session_state.qr_path = create_qr(session_id)
+        st.session_state.last_qr_time = now
+        elapsed = 0
 
-        qr = create_qr(session_id)
-        qr_box.image(qr, caption="QR refreshes every 11 seconds")
+    remaining = max(0, int(TOKEN_LIFETIME - elapsed))
+    return st.session_state.qr_path, remaining
 
-        for i in range(TOKEN_LIFETIME, 0, -1):
-            timer_box.caption(f"Refreshing in {i} seconds…")
-            time.sleep(1)
-
-# ================== STUDENT PAGE ==================
+# ================= STUDENT PAGE =================
 def student_page():
     q = st.query_params
     session_id = q.get("session_id")
@@ -134,7 +127,7 @@ def student_page():
     name = st.text_input("Full Name")
     matric = st.text_input("Matric Number (11 digits)")
 
-    if st.button("Submit"):
+    if st.button("Submit Attendance"):
         if not re.fullmatch(r"\d{11}", matric):
             st.error("Invalid matric number.")
             return
@@ -161,7 +154,7 @@ def student_page():
         save_csv(records, RECORDS_FILE)
         st.success("Attendance recorded successfully.")
 
-# ================== REP LOGIN ==================
+# ================= REP LOGIN =================
 def rep_login():
     st.title("Course Rep Login")
     u = st.text_input("Username")
@@ -174,7 +167,7 @@ def rep_login():
         else:
             st.error("Invalid credentials")
 
-# ================== REP DASHBOARD ==================
+# ================= REP DASHBOARD =================
 def rep_dashboard():
     st.title("Course Rep Dashboard")
 
@@ -205,7 +198,7 @@ def rep_dashboard():
         return
 
     session_id = st.selectbox(
-        "Select Session",
+        "Select Attendance Session",
         sessions["session_id"],
         format_func=lambda x: sessions[sessions["session_id"] == x]["title"].iloc[0]
     )
@@ -214,7 +207,11 @@ def rep_dashboard():
 
     if session["status"] == "Active":
         st.subheader("Live QR Code")
-        live_qr(session_id)
+        qr, remaining = rotating_qr(session_id)
+        if qr:
+            st.image(qr, caption=f"Refreshing in {remaining} seconds")
+        time.sleep(1)
+        st.rerun()
 
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     session_records = records[records["session_id"] == session_id]
@@ -242,7 +239,7 @@ def rep_dashboard():
         st.success("Attendance ended.")
         st.rerun()
 
-# ================== ROUTER ==================
+# ================= ROUTER =================
 def main():
     if "rep" not in st.session_state:
         st.session_state.rep = False
