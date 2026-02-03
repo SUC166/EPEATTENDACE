@@ -8,14 +8,14 @@ TOKEN_LIFETIME = 20
 
 SESSIONS_FILE = "sessions.csv"
 RECORDS_FILE = "records.csv"
-TOKENS_FILE = "codes.csv"
+CODES_FILE = "codes.csv"
 
 REP_USERNAME = "rep"
 REP_PASSWORD = "epe100"
 
 SESSION_COLS = ["session_id", "type", "title", "status", "created_at"]
 RECORD_COLS = ["session_id", "name", "matric", "time", "device_id"]
-TOKEN_COLS = ["session_id", "code", "created_at"]
+CODE_COLS = ["session_id", "code", "created_at"]
 
 def load_csv(file, cols):
     return pd.read_csv(file) if os.path.exists(file) else pd.DataFrame(columns=cols)
@@ -46,26 +46,31 @@ def gen_code():
     return f"{secrets.randbelow(10000):04d}"
 
 def create_code(session_id):
-    codes = load_csv(TOKENS_FILE, TOKEN_COLS)
+    codes = load_csv(CODES_FILE, CODE_COLS)
     code = gen_code()
     codes.loc[len(codes)] = [session_id, code, now()]
-    save_csv(codes, TOKENS_FILE)
+    save_csv(codes, CODES_FILE)
     return code
 
-def code_valid(session_id, code):
-    codes = load_csv(TOKENS_FILE, TOKEN_COLS)
+def get_latest_code(session_id):
+    codes = load_csv(CODES_FILE, CODE_COLS)
     if codes.empty:
-        return False
+        return None
+
+    codes = codes[codes["session_id"] == session_id]
+    if codes.empty:
+        return None
 
     codes["created_at"] = pd.to_datetime(codes["created_at"])
-    age = (datetime.now() - codes["created_at"]).dt.total_seconds()
+    return codes.sort_values("created_at").iloc[-1]
 
-    valid = codes[
-        (codes["session_id"] == session_id) &
-        (codes["code"] == code) &
-        (age <= TOKEN_LIFETIME)
-    ]
-    return not valid.empty
+def code_valid(session_id, input_code):
+    latest = get_latest_code(session_id)
+    if latest is None:
+        return False
+
+    age = (datetime.now() - latest["created_at"]).total_seconds()
+    return latest["code"] == input_code and age <= TOKEN_LIFETIME
 
 def rotating_code(session_id):
     if "code_time" not in st.session_state:
@@ -93,23 +98,22 @@ def student_page():
     session = active.iloc[-1]
     sid = session["session_id"]
 
-    st.title("Enter Attendance Code")
-    code = st.text_input("4-Digit Live Code")
-
-    if st.button("Continue"):
-        if not code_valid(sid, code):
-            st.error("Invalid or expired code.")
-            return
-
-        st.session_state.active_session = sid
-        st.success("Code accepted.")
-        st.rerun()
-
     if "active_session" not in st.session_state:
-        return
+        st.session_state.active_session = None
 
     if st.session_state.active_session != sid:
-        st.warning("Session expired.")
+        st.title("Enter Attendance Code")
+        code = st.text_input("4-Digit Live Code")
+
+        if st.button("Continue"):
+            if not code_valid(sid, code):
+                st.error("Invalid or expired code.")
+                return
+
+            st.session_state.active_session = sid
+            st.success("Code accepted.")
+            st.rerun()
+
         return
 
     st.subheader(session["title"])
