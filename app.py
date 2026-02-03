@@ -57,7 +57,7 @@ def generate_session_title(att_type, course=""):
 
 def generate_token():
     return secrets.token_urlsafe(16)
-    def create_qr(session_id):
+def create_qr(session_id):
     tokens = load_csv(TOKENS_FILE, TOKEN_COLS)
     token = generate_token()
     tokens.loc[len(tokens)] = [session_id, token, wat_now()]
