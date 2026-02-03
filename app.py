@@ -18,7 +18,7 @@ RECORD_COLS = ["session_id", "name", "matric", "time", "device_id"]
 CODE_COLS = ["session_id", "code", "created_at"]
 
 def load_csv(file, cols):
-    return pd.read_csv(file) if os.path.exists(file) else pd.DataFrame(columns=cols)
+    return pd.read_csv(file, dtype=str) if os.path.exists(file) else pd.DataFrame(columns=cols)
 
 def save_csv(df, file):
     df.to_csv(file, index=False)
@@ -43,9 +43,8 @@ def session_title(att_type, course=""):
     return f"{day} {course} {date} {t}" if att_type == "Per Subject" else f"{day} {date} {t}"
 
 def gen_code():
-    return f"{secrets.randbelow(10000):04d}"
+    return f"{secrets.randbelow(10000):04d}"  # ALWAYS 4 digits
 
-# ===== CODE STORAGE =====
 def write_new_code(session_id):
     codes = load_csv(CODES_FILE, CODE_COLS)
     code = gen_code()
@@ -58,7 +57,7 @@ def get_latest_code(session_id):
     if codes.empty:
         return None
 
-    codes = codes[codes["session_id"] == session_id]
+    codes = codes[codes["session_id"] == str(session_id)]
     if codes.empty:
         return None
 
@@ -70,10 +69,13 @@ def code_valid(session_id, entered_code):
     if latest is None:
         return False
 
-    age = (datetime.now() - latest["created_at"]).total_seconds()
-    return entered_code == latest["code"] and age <= TOKEN_LIFETIME
+    entered_code = str(entered_code).strip().zfill(4)
+    stored_code = str(latest["code"]).strip().zfill(4)
 
-# ===== REP LIVE CODE ROTATION =====
+    age = (datetime.now() - latest["created_at"]).total_seconds()
+
+    return entered_code == stored_code and age <= TOKEN_LIFETIME
+
 def rep_live_code(session_id):
     latest = get_latest_code(session_id)
 
