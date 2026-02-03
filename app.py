@@ -103,6 +103,10 @@ def student_page():
             st.rerun()
         return
 
+    if session["status"] != "Active":
+        st.error("Attendance has ended.")
+        return
+
     st.subheader(session["title"])
 
     name = st.text_input("Full Name")
@@ -181,11 +185,21 @@ def rep_dashboard():
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     data = records[records["session_id"] == sid]
 
+    # END ATTENDANCE BUTTON
+    if session["status"] == "Active":
+        if st.button("End Attendance"):
+            sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
+            save_csv(sessions, SESSIONS_FILE)
+            st.success("Attendance ended.")
+            st.rerun()
+
     # LIVE CODE
     if session["status"] == "Active":
         code, remaining = rep_live_code(sid)
         st.markdown(f"## Live Code: `{code}`")
         st.caption(f"Changes in {remaining} seconds")
+    else:
+        st.warning("This session has ended.")
 
     # MANUAL ADD
     st.subheader("Add Student Manually")
