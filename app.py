@@ -37,13 +37,10 @@ def device_id():
 
 def session_title(att_type, course=""):
     d = datetime.now()
-    day = d.strftime("%A")
-    date = d.strftime("%Y-%m-%d")
-    t = d.strftime("%H:%M")
-    return f"{day} {course} {date} {t}" if att_type == "Per Subject" else f"{day} {date} {t}"
+    return f"{d.strftime('%A')} {course} {d.strftime('%Y-%m-%d %H:%M')}" if att_type == "Per Subject" else f"{d.strftime('%A')} {d.strftime('%Y-%m-%d %H:%M')}"
 
 def gen_code():
-    return f"{secrets.randbelow(10000):04d}"  # ALWAYS 4 digits
+    return f"{secrets.randbelow(10000):04d}"
 
 def write_new_code(session_id):
     codes = load_csv(CODES_FILE, CODE_COLS)
@@ -54,13 +51,9 @@ def write_new_code(session_id):
 
 def get_latest_code(session_id):
     codes = load_csv(CODES_FILE, CODE_COLS)
-    if codes.empty:
-        return None
-
     codes = codes[codes["session_id"] == str(session_id)]
     if codes.empty:
         return None
-
     codes["created_at"] = pd.to_datetime(codes["created_at"])
     return codes.sort_values("created_at").iloc[-1]
 
@@ -68,25 +61,18 @@ def code_valid(session_id, entered_code):
     latest = get_latest_code(session_id)
     if latest is None:
         return False
-
     entered_code = str(entered_code).strip().zfill(4)
     stored_code = str(latest["code"]).strip().zfill(4)
-
     age = (datetime.now() - latest["created_at"]).total_seconds()
-
     return entered_code == stored_code and age <= TOKEN_LIFETIME
 
 def rep_live_code(session_id):
     latest = get_latest_code(session_id)
-
     if latest is None:
         return write_new_code(session_id), TOKEN_LIFETIME
-
     age = (datetime.now() - latest["created_at"]).total_seconds()
-
     if age >= TOKEN_LIFETIME:
         return write_new_code(session_id), TOKEN_LIFETIME
-
     return latest["code"], int(TOKEN_LIFETIME - age)
 
 # ================= STUDENT =================
@@ -112,11 +98,9 @@ def student_page():
             if not code_valid(sid, entered):
                 st.error("Invalid or expired code.")
                 return
-
             st.session_state.active_session = sid
             st.success("Code accepted.")
             st.rerun()
-
         return
 
     st.subheader(session["title"])
@@ -132,7 +116,7 @@ def student_page():
         records = load_csv(RECORDS_FILE, RECORD_COLS)
 
         if normalize(name) in records["name"].apply(normalize).values:
-            st.error("Name already recorded.")
+            st.error("Name already exists.")
             return
 
         if matric in records["matric"].values:
@@ -178,7 +162,6 @@ def rep_dashboard():
 
         sessions.loc[len(sessions)] = [sid, att_type, title, "Active", now()]
         save_csv(sessions, SESSIONS_FILE)
-
         write_new_code(sid)
 
         st.success("Attendance started.")
@@ -195,17 +178,58 @@ def rep_dashboard():
     )
 
     session = sessions[sessions["session_id"] == sid].iloc[0]
-
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     data = records[records["session_id"] == sid]
 
-    st.subheader("Live Attendance Code")
-
+    # LIVE CODE
     if session["status"] == "Active":
         code, remaining = rep_live_code(sid)
-        st.markdown(f"## `{code}`")
+        st.markdown(f"## Live Code: `{code}`")
         st.caption(f"Changes in {remaining} seconds")
 
+    # MANUAL ADD
+    st.subheader("Add Student Manually")
+    new_name = st.text_input("Name")
+    new_matric = st.text_input("Matric Number")
+
+    if st.button("Add Student"):
+        if normalize(new_name) in records["name"].apply(normalize).values:
+            st.error("Name already exists.")
+        elif new_matric in records["matric"].values:
+            st.error("Matric already used.")
+        else:
+            records.loc[len(records)] = [sid, new_name, new_matric, now(), "rep"]
+            save_csv(records, RECORDS_FILE)
+            st.success("Student added.")
+            st.rerun()
+
+    # EDIT TABLE
+    st.subheader("Edit Attendance")
+    if not data.empty:
+        edited = st.data_editor(data[["name", "matric", "time"]], use_container_width=True)
+
+        if st.button("Save Edits"):
+            for i, row in edited.iterrows():
+                records.loc[
+                    (records["session_id"] == sid) & (records["time"] == row["time"]),
+                    ["name", "matric"]
+                ] = [row["name"], row["matric"]]
+
+            save_csv(records, RECORDS_FILE)
+            st.success("Edits saved.")
+            st.rerun()
+
+    # DELETE STUDENT
+    st.subheader("Delete Student Entry")
+    del_matric = st.text_input("Matric to Delete")
+
+    if st.button("Delete"):
+        records = records[records["matric"] != del_matric]
+        save_csv(records, RECORDS_FILE)
+        st.success("Deleted.")
+        st.rerun()
+
+    # VIEW & DOWNLOAD
     st.subheader("Attendance Records")
 
     if not data.empty:
