@@ -9,7 +9,7 @@ from datetime import datetime
 import qrcode
 
 # ================= CONFIG =================
-APP_URL = "https://your-app-name.streamlit.app"  # CHANGE AFTER DEPLOY
+APP_URL = "https://epeattendance.streamlit.app"  # CHANGE AFTER DEPLOY
 
 SESSIONS_FILE = "sessions.csv"
 RECORDS_FILE = "records.csv"
@@ -132,19 +132,18 @@ def student_page():
             return
 
         records = load_csv(RECORDS_FILE, RECORD_COLS)
+
+        if normalize(name) in records["name"].apply(normalize).values:
+            st.error("This name has already been recorded.")
+            return
+
+        if matric in records["matric"].values:
+            st.error("This matric number has already been used.")
+            return
+
         device = get_device_id()
-        session_records = records[records["session_id"] == session_id]
-
-        if device in session_records["device_id"].values:
+        if device in records[records["session_id"] == session_id]["device_id"].values:
             st.error("One entry per device only.")
-            return
-
-        if matric in session_records["matric"].values:
-            st.error("Matric already recorded.")
-            return
-
-        if normalize(name) in session_records["name"].apply(normalize).values:
-            st.error("Name already recorded.")
             return
 
         records.loc[len(records)] = [
@@ -204,72 +203,25 @@ def rep_dashboard():
 
     session = sessions[sessions["session_id"] == session_id].iloc[0]
 
-    # ---------- EVERYTHING INTERACTIVE FIRST ----------
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     session_records = records[records["session_id"] == session_id]
 
     st.subheader("Attendance Records")
 
-    if session_records.empty:
-        st.info("No attendance recorded yet.")
-    else:
-        edited = st.data_editor(
-            session_records,
-            use_container_width=True,
-            num_rows="fixed"
+    if not session_records.empty:
+        st.dataframe(
+            session_records[["name", "matric", "time"]],
+            use_container_width=True
         )
 
-        if st.button("Save Changes"):
-            records = records[records["session_id"] != session_id]
-            records = pd.concat([records, edited], ignore_index=True)
-            save_csv(records, RECORDS_FILE)
-            st.success("Attendance updated.")
-            st.rerun()
+    st.download_button(
+        "Download CSV",
+        data=session_records[["name", "matric", "time"]].to_csv(index=False),
+        file_name=f"{session['title']}.csv",
+        mime="text/csv"
+    )
 
-    st.subheader("Manual Add Student")
-    m_name = st.text_input("Student Name")
-    m_matric = st.text_input("Matric Number")
-
-    if st.button("Add Student"):
-        if not re.fullmatch(r"\d{11}", m_matric):
-            st.error("Invalid matric.")
-        elif m_matric in session_records["matric"].values:
-            st.error("Matric already exists.")
-        else:
-            records.loc[len(records)] = [
-                session_id, m_name, m_matric, wat_now(), "REP_MANUAL"
-            ]
-            save_csv(records, RECORDS_FILE)
-            st.success("Student added.")
-            st.rerun()
-
-    st.subheader("Delete Student")
-    del_matric = st.text_input("Matric to delete")
-
-    if st.button("Delete Student"):
-        before = len(records)
-        records = records[
-            ~((records["session_id"] == session_id) &
-              (records["matric"] == del_matric))
-        ]
-        if len(records) == before:
-            st.error("Student not found.")
-        else:
-            save_csv(records, RECORDS_FILE)
-            st.success("Student deleted.")
-            st.rerun()
-
-    if st.button("End Attendance Session", type="primary"):
-        sessions.loc[
-            sessions["session_id"] == session_id, "status"
-        ] = "Ended"
-        save_csv(sessions, SESSIONS_FILE)
-        st.success("Attendance ended.")
-        st.rerun()
-
-    # ---------- QR CODE LAST ----------
     if session["status"] == "Active":
-        st.divider()
         st.subheader("Live QR Code")
         qr, remaining = rotating_qr(session_id)
         if qr:
