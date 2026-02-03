@@ -15,7 +15,7 @@ SESSIONS_FILE = "sessions.csv"
 RECORDS_FILE = "records.csv"
 TOKENS_FILE = "tokens.csv"
 
-TOKEN_LIFETIME = 20
+TOKEN_LIFETIME = 30
 
 REP_USERNAME = "rep"
 REP_PASSWORD = "epe100"
