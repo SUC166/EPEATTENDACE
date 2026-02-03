@@ -103,12 +103,6 @@ def student_page():
             st.rerun()
         return
 
-    if session["status"] != "Active":
-        st.error("Attendance has ended.")
-        return
-
-    st.subheader(session["title"])
-
     name = st.text_input("Full Name")
     matric = st.text_input("Matric Number (11 digits)")
 
@@ -173,6 +167,7 @@ def rep_dashboard():
 
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     if sessions.empty:
+        st.info("No sessions yet.")
         return
 
     sid = st.selectbox(
@@ -182,28 +177,40 @@ def rep_dashboard():
     )
 
     session = sessions[sessions["session_id"] == sid].iloc[0]
+
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     data = records[records["session_id"] == sid]
 
-    # END ATTENDANCE BUTTON
-    if session["status"] == "Active":
-        if st.button("End Attendance"):
-            sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
-            save_csv(sessions, SESSIONS_FILE)
-            st.success("Attendance ended.")
-            st.rerun()
+    st.divider()
+    st.subheader(f"Session: {session['title']}")
+    st.write(f"**Status:** {session['status']}")
 
-    # LIVE CODE
+    # LIVE CODE DISPLAY
     if session["status"] == "Active":
         code, remaining = rep_live_code(sid)
         st.markdown(f"## Live Code: `{code}`")
         st.caption(f"Changes in {remaining} seconds")
-    else:
-        st.warning("This session has ended.")
 
-    # MANUAL ADD
+    # ✅ END ATTENDANCE BUTTON (FIXED)
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if session["status"] == "Active":
+            if st.button("🛑 END ATTENDANCE", use_container_width=True):
+                sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
+                save_csv(sessions, SESSIONS_FILE)
+                st.success("Attendance ended successfully.")
+                st.rerun()
+
+    with col2:
+        if session["status"] == "Ended":
+            st.warning("Attendance session has ended.")
+
+    st.divider()
+
+    # MANUAL ADD STUDENT
     st.subheader("Add Student Manually")
-    new_name = st.text_input("Name")
+    new_name = st.text_input("Student Name")
     new_matric = st.text_input("Matric Number")
 
     if st.button("Add Student"):
@@ -218,12 +225,13 @@ def rep_dashboard():
             st.rerun()
 
     # EDIT TABLE
-    st.subheader("Edit Attendance")
+    st.subheader("Edit Attendance Table")
+
     if not data.empty:
         edited = st.data_editor(data[["name", "matric", "time"]], use_container_width=True)
 
         if st.button("Save Edits"):
-            for i, row in edited.iterrows():
+            for _, row in edited.iterrows():
                 records.loc[
                     (records["session_id"] == sid) & (records["time"] == row["time"]),
                     ["name", "matric"]
@@ -235,12 +243,12 @@ def rep_dashboard():
 
     # DELETE STUDENT
     st.subheader("Delete Student Entry")
-    del_matric = st.text_input("Matric to Delete")
+    del_matric = st.text_input("Matric Number to Delete")
 
-    if st.button("Delete"):
+    if st.button("Delete Student"):
         records = records[records["matric"] != del_matric]
         save_csv(records, RECORDS_FILE)
-        st.success("Deleted.")
+        st.success("Deleted successfully.")
         st.rerun()
 
     # VIEW & DOWNLOAD
