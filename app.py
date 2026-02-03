@@ -9,7 +9,7 @@ from datetime import datetime
 import qrcode
 
 # ================= CONFIG =================
-APP_URL = "https://epeattendance.streamlit.app"  # CHANGE AFTER DEPLOY
+APP_URL = "https://your-app-name.streamlit.app"  # CHANGE AFTER DEPLOY
 
 SESSIONS_FILE = "sessions.csv"
 RECORDS_FILE = "records.csv"
@@ -174,7 +174,7 @@ def rep_dashboard():
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
     course = ""
     if att_type == "Per Subject":
-        course = st.text_input("Course Code (e.g FRN101)")
+        course = st.text_input("Course Code")
 
     if st.button("Start Session"):
         if att_type == "Per Subject" and not course:
@@ -204,12 +204,7 @@ def rep_dashboard():
 
     session = sessions[sessions["session_id"] == session_id].iloc[0]
 
-    if session["status"] == "Active":
-        st.subheader("Live QR Code")
-        qr, remaining = rotating_qr(session_id)
-        if qr:
-            st.image(qr, caption=f"Refreshing in {remaining} seconds")
-
+    # ---------- EVERYTHING INTERACTIVE FIRST ----------
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     session_records = records[records["session_id"] == session_id]
 
@@ -249,7 +244,7 @@ def rep_dashboard():
             st.rerun()
 
     st.subheader("Delete Student")
-    del_matric = st.text_input("Matric Number to Delete")
+    del_matric = st.text_input("Matric to delete")
 
     if st.button("Delete Student"):
         before = len(records)
@@ -261,7 +256,7 @@ def rep_dashboard():
             st.error("Student not found.")
         else:
             save_csv(records, RECORDS_FILE)
-            st.success("Student removed.")
+            st.success("Student deleted.")
             st.rerun()
 
     if st.button("End Attendance Session", type="primary"):
@@ -271,6 +266,14 @@ def rep_dashboard():
         save_csv(sessions, SESSIONS_FILE)
         st.success("Attendance ended.")
         st.rerun()
+
+    # ---------- QR CODE LAST ----------
+    if session["status"] == "Active":
+        st.divider()
+        st.subheader("Live QR Code")
+        qr, remaining = rotating_qr(session_id)
+        if qr:
+            st.image(qr, caption=f"Refreshing in {remaining} seconds")
 
 # ================= ROUTER =================
 def main():
