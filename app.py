@@ -9,7 +9,6 @@ from datetime import datetime
 import qrcode
 from streamlit_autorefresh import st_autorefresh
 
-# ================= CONFIG =================
 APP_URL = "https://epeattendance.streamlit.app"
 
 SESSIONS_FILE = "sessions.csv"
@@ -25,7 +24,6 @@ SESSION_COLS = ["session_id", "type", "title", "status", "created_at"]
 RECORD_COLS = ["session_id", "name", "matric", "time", "device_id"]
 TOKEN_COLS = ["session_id", "token", "created_at"]
 
-# ================= HELPERS =================
 def load_csv(file, cols):
     if os.path.exists(file):
         return pd.read_csv(file)
@@ -39,7 +37,6 @@ def normalize(txt):
 
 def wat_now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
 def get_device_id():
     if "device_id" not in st.session_state:
         raw = f"{st.session_state}{time.time()}"
@@ -57,6 +54,7 @@ def generate_session_title(att_type, course=""):
 
 def generate_token():
     return secrets.token_urlsafe(16)
+
 def create_qr(session_id):
     tokens = load_csv(TOKENS_FILE, TOKEN_COLS)
     token = generate_token()
@@ -100,7 +98,6 @@ def rotating_qr(session_id):
     remaining = max(0, int(TOKEN_LIFETIME - elapsed))
     return st.session_state.qr_path, remaining
 
-# ================= STUDENT PAGE =================
 def student_page():
     q = st.query_params
     session_id = q.get("session_id")
@@ -152,25 +149,27 @@ def student_page():
         save_csv(records, RECORDS_FILE)
         st.success("Attendance recorded successfully.")
 
-# ================= REP LOGIN =================
 def rep_login():
     st.title("Course Rep Login")
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if u == REP_USERNAME and p == REP_PASSWORD:
+        if username == REP_USERNAME and password == REP_PASSWORD:
             st.session_state.rep = True
             st.rerun()
         else:
-            st.error("Invalid credentials")
-            def rep_dashboard():
+            st.error("Invalid login details")
+
+def rep_dashboard():
     st_autorefresh(interval=1000, key="qr_refresh")
 
     st.title("Course Rep Dashboard")
 
     st.subheader("Start Attendance Session")
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
+
     course = ""
     if att_type == "Per Subject":
         course = st.text_input("Course Code")
@@ -198,7 +197,6 @@ def rep_login():
     )
 
     session = sessions[sessions["session_id"] == session_id].iloc[0]
-
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     session_records = records[records["session_id"] == session_id]
 
@@ -224,7 +222,6 @@ def rep_login():
         if qr:
             st.image(qr, caption=f"Refreshing in {remaining} seconds")
 
-# ================= ROUTER =================
 def main():
     if "rep" not in st.session_state:
         st.session_state.rep = False
