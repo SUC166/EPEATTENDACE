@@ -159,6 +159,7 @@ def rep_dashboard():
     st_autorefresh(interval=1000, key="refresh")
     st.title(f"{DEPARTMENT} Course Rep Dashboard")
 
+    # ===== START ATTENDANCE =====
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
     course = st.text_input("Course Code") if att_type == "Per Subject" else ""
 
@@ -174,8 +175,10 @@ def rep_dashboard():
         st.success("Attendance started.")
         st.rerun()
 
+    # ===== LOAD SESSIONS =====
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     if sessions.empty:
+        st.info("No sessions available.")
         return
 
     sid = st.selectbox(
@@ -185,18 +188,23 @@ def rep_dashboard():
     )
 
     session = sessions[sessions["session_id"] == sid].iloc[0]
+
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     data = records[records["session_id"] == sid]
 
+    st.divider()
     st.subheader(f"Session: {session['title']}")
     st.write(f"Department: {session['department']}")
     st.write(f"Status: {session['status']}")
 
+    # ===== LIVE CODE =====
     if session["status"] == "Active":
         code, remaining = rep_live_code(sid)
         st.markdown(f"## Live Code: `{code}`")
         st.caption(f"Changes in {remaining} seconds")
-if session["status"] == "Active":
+
+    # ===== END ATTENDANCE =====
+    if session["status"] == "Active":
         if st.button("🛑 END ATTENDANCE"):
             sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
             save_csv(sessions, SESSIONS_FILE)
@@ -214,6 +222,7 @@ if session["status"] == "Active":
 
     st.divider()
 
+    # ===== MANUAL ADD STUDENT =====
     st.subheader("Add Student Manually")
     new_name = st.text_input("Student Name")
     new_matric = st.text_input("Matric Number")
@@ -224,18 +233,21 @@ if session["status"] == "Active":
         st.success("Student added.")
         st.rerun()
 
+    # ===== DELETE STUDENT =====
     st.subheader("Delete Student")
     del_matric = st.text_input("Matric Number to Delete")
 
     if st.button("Delete Student"):
-        records = records[~((records["session_id"] == sid) & (records["matric"] == del_matric))]
+        records = records[
+            ~((records["session_id"] == sid) & (records["matric"] == del_matric))
+        ]
         save_csv(records, RECORDS_FILE)
         st.success("Deleted.")
         st.rerun()
 
+    # ===== VIEW RECORDS =====
     st.subheader("Attendance Records")
     st.dataframe(data[["department", "name", "matric", "time"]], use_container_width=True)
-
 
 def main():
     if "rep" not in st.session_state:
