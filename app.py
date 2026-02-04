@@ -178,13 +178,11 @@ def rep_dashboard():
     st.subheader(f"Session: {session['title']}")
     st.write(f"**Status:** {session['status']}")
 
-    # ===== LIVE CODE =====
+    # ===== LIVE CODE (FIXED) =====
     if session["status"] == "Active":
-        latest = get_latest_code(sid)
-        if latest is not None:
-            remaining = TOKEN_LIFETIME - (datetime.now() - latest["created_at"]).total_seconds()
-            st.markdown(f"## Live Code: `{latest['code']}`")
-            st.caption(f"Changes in {max(0, int(remaining))} seconds")
+        code, remaining = rep_live_code(sid)
+        st.markdown(f"## Live Code: `{code}`")
+        st.caption(f"Changes in {remaining} seconds")
 
     # ===== END ATTENDANCE =====
     if session["status"] == "Active":
@@ -201,9 +199,36 @@ def rep_dashboard():
 
     st.divider()
 
+    # ===== MANUAL ADD STUDENT (RESTORED) =====
+    st.subheader("Add Student Manually")
+    new_name = st.text_input("Student Name")
+    new_matric = st.text_input("Matric Number")
+
+    if st.button("Add Student"):
+        if normalize(new_name) in records["name"].apply(normalize).values:
+            st.error("Name already exists.")
+        elif new_matric in records["matric"].values:
+            st.error("Matric already used.")
+        else:
+            records.loc[len(records)] = [sid, new_name, new_matric, now(), "rep"]
+            save_csv(records, RECORDS_FILE)
+            st.success("Student added.")
+            st.rerun()
+
+    # ===== DELETE STUDENT (RESTORED) =====
+    st.subheader("Delete Student Entry")
+    del_matric = st.text_input("Matric Number to Delete")
+
+    if st.button("Delete Student"):
+        records = records[
+            ~((records["session_id"] == sid) & (records["matric"] == del_matric))
+        ]
+        save_csv(records, RECORDS_FILE)
+        st.success("Student deleted.")
+        st.rerun()
+
     # ===== ATTENDANCE RECORDS =====
     st.subheader("Attendance Records")
-
     if data.empty:
         st.info("No attendance records yet.")
     else:
