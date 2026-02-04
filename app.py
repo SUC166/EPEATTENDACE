@@ -6,15 +6,16 @@ from streamlit_autorefresh import st_autorefresh
 
 TOKEN_LIFETIME = 20
 
-# ===== EDIT THIS TO CHANGE DEPARTMENT =====
+# ===== CHANGE THIS DEPARTMENT =====
 DEPARTMENT = "EPE"
+
+# ===== REPLACE WITH YOUR HASHES =====
+REP_USERNAME_HASH = "PASTE_USERNAME_HASH_HERE"
+REP_PASSWORD_HASH = "PASTE_PASSWORD_HASH_HERE"
 
 SESSIONS_FILE = "sessions.csv"
 RECORDS_FILE = "records.csv"
 CODES_FILE = "codes.csv"
-
-REP_USERNAME = "rep"
-REP_PASSWORD = "epe100"
 
 SESSION_COLS = ["session_id", "type", "title", "status", "created_at", "department"]
 RECORD_COLS = ["session_id", "name", "matric", "time", "device_id", "department"]
@@ -31,6 +32,9 @@ def normalize(txt):
 
 def now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def sha256_hash(text):
+    return hashlib.sha256(text.encode()).hexdigest()
 
 def device_id():
     if "device_id" not in st.session_state:
@@ -144,15 +148,21 @@ def student_page():
     st.caption("💙 made with love EPE2025/26")
 def rep_login():
     st.title("Course Rep Login")
+
     u = st.text_input("Username")
     p = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if u == REP_USERNAME and p == REP_PASSWORD:
+        u_hash = sha256_hash(u)
+        p_hash = sha256_hash(p)
+
+        if u_hash == REP_USERNAME_HASH and p_hash == REP_PASSWORD_HASH:
             st.session_state.rep = True
+            st.success("Login successful.")
             st.rerun()
         else:
-            st.error("Wrong login")
+            st.error("Invalid login credentials.")
+
 
 def rep_dashboard():
     st_autorefresh(interval=1000, key="refresh")
@@ -163,19 +173,16 @@ def rep_dashboard():
 
     active_sessions = sessions[sessions["status"] == "Active"]
 
-    # ===== BLOCK MULTIPLE ACTIVE ATTENDANCE =====
     if not active_sessions.empty:
         st.warning("⚠️ Attendance is ACTIVE. End it before starting a new one.")
 
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
     course = st.text_input("Course Code") if att_type == "Per Subject" else ""
 
-    # ===== START ATTENDANCE (CLEAR OLD RECORDS) =====
     if st.button("Start Attendance"):
         if not active_sessions.empty:
-            st.error("End the current attendance first.")
+            st.error("End current attendance first.")
         else:
-            # CLEAR ALL OLD RECORDS
             save_csv(pd.DataFrame(columns=RECORD_COLS), RECORDS_FILE)
 
             sid = str(time.time())
@@ -185,14 +192,11 @@ def rep_dashboard():
             save_csv(sessions, SESSIONS_FILE)
 
             write_new_code(sid)
-
-            st.success("Attendance started — old records cleared.")
+            st.success("Attendance started — records cleared.")
             st.rerun()
 
-    # ===== LOAD SESSIONS =====
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     if sessions.empty:
-        st.info("No sessions available.")
         return
 
     sid = st.selectbox(
@@ -209,22 +213,17 @@ def rep_dashboard():
     st.write(f"Department: {session['department']}")
     st.write(f"Status: {session['status']}")
 
-    # ===== LIVE CODE =====
     if session["status"] == "Active":
         code, remaining = rep_live_code(sid)
         st.markdown(f"## Live Code: `{code}`")
         st.caption(f"Changes in {remaining} seconds")
-
-    # ===== END ATTENDANCE =====
-    if session["status"] == "Active":
+if session["status"] == "Active":
         if st.button("🛑 END ATTENDANCE"):
             sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
             save_csv(sessions, SESSIONS_FILE)
-
             st.success("Attendance ended.")
             st.rerun()
 
-    # ===== DOWNLOAD CSV BUTTON =====
     if session["status"] == "Ended":
         safe_title = re.sub(r"[^\w\-]", "_", session["title"])
         filename = f"{DEPARTMENT}_{safe_title}_Attendance.csv"
@@ -235,7 +234,7 @@ def rep_dashboard():
         csv_bytes = export_data[["department", "name", "matric", "time"]].to_csv(index=False).encode()
 
         st.download_button(
-            label="📥 Download Attendance CSV",
+            "📥 Download Attendance CSV",
             data=csv_bytes,
             file_name=filename,
             mime="text/csv"
@@ -243,7 +242,6 @@ def rep_dashboard():
 
     st.divider()
 
-    # ===== MANUAL ADD STUDENT =====
     st.subheader("Add Student Manually")
     new_name = st.text_input("Student Name")
     new_matric = st.text_input("Matric Number")
@@ -254,7 +252,6 @@ def rep_dashboard():
         st.success("Student added.")
         st.rerun()
 
-    # ===== EDIT STUDENT RECORD =====
     st.subheader("Edit Student Record")
 
     if not data.empty:
@@ -272,7 +269,6 @@ def rep_dashboard():
             st.success("Record updated.")
             st.rerun()
 
-    # ===== DELETE STUDENT =====
     st.subheader("Delete Student")
     del_matric = st.text_input("Matric Number to Delete")
 
@@ -284,9 +280,9 @@ def rep_dashboard():
         st.success("Student deleted.")
         st.rerun()
 
-    # ===== VIEW RECORDS =====
     st.subheader("Attendance Records")
     st.dataframe(data[["department", "name", "matric", "time"]], use_container_width=True)
+
 
 def main():
     if "rep" not in st.session_state:
