@@ -126,7 +126,8 @@ def student_page():
         st.success("Attendance recorded.")
 
     st.divider()
-    st.caption("💙 made with love EPE2025/26")def rep_login():
+    st.caption("💙 made with love EPE2025/26")
+def rep_login():
     st.title("Course Rep Login")
     u = st.text_input("Username")
     p = st.text_input("Password", type="password")
