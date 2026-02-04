@@ -3,13 +3,14 @@ import pandas as pd
 import os, re, time, secrets, hashlib
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
+from zoneinfo import ZoneInfo
 
 TOKEN_LIFETIME = 20
+TIMEZONE = ZoneInfo("Africa/Lagos")
 
-# ===== CHANGE THIS DEPARTMENT =====
 DEPARTMENT = "EPE"
 
-# ===== REPLACE WITH YOUR HASHES =====
+# HASHED LOGIN — test / pass
 REP_USERNAME_HASH = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 REP_PASSWORD_HASH = "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1"
 
@@ -31,7 +32,7 @@ def normalize(txt):
     return re.sub(r"\s+", " ", str(txt).strip()).lower()
 
 def now():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
 
 def sha256_hash(text):
     return hashlib.sha256(text.encode()).hexdigest()
@@ -43,8 +44,8 @@ def device_id():
     return st.session_state.device_id
 
 def session_title(att_type, course=""):
-    d = datetime.now()
-    base = f"{d.strftime('%Y-%m-%d %H:%M')}"
+    d = datetime.now(TIMEZONE)
+    base = d.strftime('%Y-%m-%d %H:%M')
     if att_type == "Per Subject":
         return f"{DEPARTMENT} - {course} {base}"
     return f"{DEPARTMENT} - Daily {base}"
@@ -70,7 +71,7 @@ def code_valid(session_id, entered_code):
     latest = get_latest_code(session_id)
     if latest is None:
         return False
-    age = (datetime.now() - latest["created_at"]).total_seconds()
+    age = (datetime.now(TIMEZONE) - latest["created_at"]).total_seconds()
     return str(entered_code).zfill(4) == str(latest["code"]).zfill(4) and age <= TOKEN_LIFETIME
 
 def rep_live_code(session_id):
@@ -78,7 +79,7 @@ def rep_live_code(session_id):
     if latest is None:
         return write_new_code(session_id), TOKEN_LIFETIME
 
-    age = (datetime.now() - latest["created_at"]).total_seconds()
+    age = (datetime.now(TIMEZONE) - latest["created_at"]).total_seconds()
     if age >= TOKEN_LIFETIME:
         return write_new_code(session_id), TOKEN_LIFETIME
 
@@ -153,15 +154,13 @@ def rep_login():
     p = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        u_hash = sha256_hash(u)
-        p_hash = sha256_hash(p)
-
-        if u_hash == REP_USERNAME_HASH and p_hash == REP_PASSWORD_HASH:
+        if sha256_hash(u) == REP_USERNAME_HASH and sha256_hash(p) == REP_PASSWORD_HASH:
             st.session_state.rep = True
             st.success("Login successful.")
             st.rerun()
         else:
             st.error("Invalid login credentials.")
+
 
 def rep_dashboard():
     st_autorefresh(interval=1000, key="refresh")
@@ -171,9 +170,6 @@ def rep_dashboard():
     records = load_csv(RECORDS_FILE, RECORD_COLS)
 
     active_sessions = sessions[sessions["status"] == "Active"]
-
-    if not active_sessions.empty:
-        st.warning("⚠️ Attendance is ACTIVE. End it before starting a new one.")
 
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
     course = st.text_input("Course Code") if att_type == "Per Subject" else ""
@@ -187,9 +183,7 @@ def rep_dashboard():
             sid = str(time.time())
             title = session_title(att_type, course)
 
-            sessions.loc[len(sessions)] = [
-                sid, att_type, title, "Active", now(), DEPARTMENT
-            ]
+            sessions.loc[len(sessions)] = [sid, att_type, title, "Active", now(), DEPARTMENT]
             save_csv(sessions, SESSIONS_FILE)
 
             write_new_code(sid)
@@ -213,9 +207,7 @@ def rep_dashboard():
     st.subheader(f"Session: {session['title']}")
     st.write(f"Department: {session['department']}")
     st.write(f"Status: {session['status']}")
-
-    # ===== LIVE CODE =====
-    if session["status"] == "Active":
+if session["status"] == "Active":
         code, remaining = rep_live_code(sid)
         st.markdown(f"## Live Code: `{code}`")
         st.caption(f"Changes in {remaining} seconds")
@@ -226,17 +218,14 @@ def rep_dashboard():
             st.success("Attendance ended.")
             st.rerun()
 
-    # ===== CSV DOWNLOAD =====
     if session["status"] == "Ended":
         safe_title = re.sub(r"[^\w\-]", "_", session["title"])
         filename = f"{DEPARTMENT}_{safe_title}_Attendance.csv"
 
-        export_data = data.copy()
-        export_data["department"] = session["department"]
+        export_data = data[["department", "name", "matric", "time"]].copy()
+        export_data.insert(0, "S/N", range(1, len(export_data) + 1))
 
-        csv_bytes = export_data[
-            ["department", "name", "matric", "time"]
-        ].to_csv(index=False).encode()
+        csv_bytes = export_data.to_csv(index=False).encode()
 
         st.download_button(
             "📥 Download Attendance CSV",
@@ -247,20 +236,16 @@ def rep_dashboard():
 
     st.divider()
 
-    # ===== ADD STUDENT =====
     st.subheader("Add Student Manually")
     new_name = st.text_input("Student Name")
     new_matric = st.text_input("Matric Number")
 
     if st.button("Add Student"):
-        records.loc[len(records)] = [
-            sid, new_name, new_matric, now(), "rep", DEPARTMENT
-        ]
+        records.loc[len(records)] = [sid, new_name, new_matric, now(), "rep", DEPARTMENT]
         save_csv(records, RECORDS_FILE)
         st.success("Student added.")
         st.rerun()
 
-    # ===== EDIT STUDENT =====
     st.subheader("Edit Student Record")
 
     if not data.empty:
@@ -278,7 +263,6 @@ def rep_dashboard():
             st.success("Record updated.")
             st.rerun()
 
-    # ===== DELETE STUDENT =====
     st.subheader("Delete Student")
     del_matric = st.text_input("Matric Number to Delete")
 
@@ -290,13 +274,14 @@ def rep_dashboard():
         st.success("Student deleted.")
         st.rerun()
 
-    # ===== VIEW TABLE =====
     st.subheader("Attendance Records")
-    st.dataframe(
-        data[["department", "name", "matric", "time"]],
-        use_container_width=True
-    )
 
+    if not data.empty:
+        display_df = data[["department", "name", "matric", "time"]].copy()
+        display_df.insert(0, "S/N", range(1, len(display_df) + 1))
+        st.dataframe(display_df, use_container_width=True)
+    else:
+        st.info("No attendance yet.")
 
 
 def main():
