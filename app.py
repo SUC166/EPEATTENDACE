@@ -62,11 +62,18 @@ def write_new_code(session_id):
 def get_latest_code(session_id):
     codes = load_csv(CODES_FILE, CODE_COLS)
     codes = codes[codes["session_id"] == str(session_id)]
+
     if codes.empty:
         return None
-    codes["created_at"] = pd.to_datetime(codes["created_at"])
-    return codes.sort_values("created_at").iloc[-1]
 
+    codes["created_at"] = pd.to_datetime(codes["created_at"], errors="coerce")
+    codes = codes.dropna(subset=["created_at"])
+
+    if codes.empty:
+        return None
+
+    return codes.sort_values("created_at").iloc[-1]
+    
 def code_valid(session_id, entered_code):
     latest = get_latest_code(session_id)
     if latest is None:
@@ -76,15 +83,31 @@ def code_valid(session_id, entered_code):
 
 def rep_live_code(session_id):
     latest = get_latest_code(session_id)
+
+    # If no code exists yet, create one now
     if latest is None:
         return write_new_code(session_id), TOKEN_LIFETIME
 
-    age = (datetime.now(TIMEZONE) - latest["created_at"]).total_seconds()
+    # Convert created_at safely to timezone-aware datetime
+    created = pd.to_datetime(latest["created_at"], errors="coerce")
+
+    # If parsing failed, reset code
+    if pd.isna(created):
+        return write_new_code(session_id), TOKEN_LIFETIME
+
+    # Force timezone awareness (Africa/Lagos)
+    if created.tzinfo is None:
+        created = created.tz_localize(TIMEZONE)
+    else:
+        created = created.tz_convert(TIMEZONE)
+
+    age = (datetime.now(TIMEZONE) - created).total_seconds()
+
+    # If expired, generate a new code
     if age >= TOKEN_LIFETIME:
         return write_new_code(session_id), TOKEN_LIFETIME
 
-    return latest["code"], int(TOKEN_LIFETIME - age)
-
+    return str(latest["code"]).zfill(4), int(TOKEN_LIFETIME - age)
 
 def student_page():
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
