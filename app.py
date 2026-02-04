@@ -6,6 +6,9 @@ from streamlit_autorefresh import st_autorefresh
 
 TOKEN_LIFETIME = 20
 
+# ===== EDIT THIS TO CHANGE DEPARTMENT =====
+DEPARTMENT = "EPE"
+
 SESSIONS_FILE = "sessions.csv"
 RECORDS_FILE = "records.csv"
 CODES_FILE = "codes.csv"
@@ -13,8 +16,8 @@ CODES_FILE = "codes.csv"
 REP_USERNAME = "rep"
 REP_PASSWORD = "epe100"
 
-SESSION_COLS = ["session_id", "type", "title", "status", "created_at"]
-RECORD_COLS = ["session_id", "name", "matric", "time", "device_id"]
+SESSION_COLS = ["session_id", "type", "title", "status", "created_at", "department"]
+RECORD_COLS = ["session_id", "name", "matric", "time", "device_id", "department"]
 CODE_COLS = ["session_id", "code", "created_at"]
 
 def load_csv(file, cols):
@@ -37,9 +40,10 @@ def device_id():
 
 def session_title(att_type, course=""):
     d = datetime.now()
+    base = f"{d.strftime('%Y-%m-%d %H:%M')}"
     if att_type == "Per Subject":
-        return f"{course} {d.strftime('%Y-%m-%d %H:%M')}"
-    return f"Daily {d.strftime('%Y-%m-%d %H:%M')}"
+        return f"{DEPARTMENT} - {course} {base}"
+    return f"{DEPARTMENT} - Daily {base}"
 
 def gen_code():
     return f"{secrets.randbelow(10000):04d}"
@@ -104,6 +108,7 @@ def student_page():
         return
 
     st.markdown("### 📘 Attendance Details")
+    st.write(f"**Department:** {session['department']}")
     st.write(f"**Course / Title:** {session['title']}")
     st.write(f"**Date:** {session['created_at'].split(' ')[0]}")
     st.divider()
@@ -131,7 +136,7 @@ def student_page():
             st.error("One entry per device.")
             return
 
-        records.loc[len(records)] = [sid, name, matric, now(), device_id()]
+        records.loc[len(records)] = [sid, name, matric, now(), device_id(), DEPARTMENT]
         save_csv(records, RECORDS_FILE)
         st.success("Attendance recorded.")
 
@@ -152,7 +157,7 @@ def rep_login():
 
 def rep_dashboard():
     st_autorefresh(interval=1000, key="refresh")
-    st.title("Course Rep Dashboard")
+    st.title(f"{DEPARTMENT} Course Rep Dashboard")
 
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
     course = st.text_input("Course Code") if att_type == "Per Subject" else ""
@@ -161,9 +166,11 @@ def rep_dashboard():
         sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
         sid = str(time.time())
         title = session_title(att_type, course)
-        sessions.loc[len(sessions)] = [sid, att_type, title, "Active", now()]
+
+        sessions.loc[len(sessions)] = [sid, att_type, title, "Active", now(), DEPARTMENT]
         save_csv(sessions, SESSIONS_FILE)
         write_new_code(sid)
+
         st.success("Attendance started.")
         st.rerun()
 
@@ -182,58 +189,53 @@ def rep_dashboard():
     data = records[records["session_id"] == sid]
 
     st.subheader(f"Session: {session['title']}")
+    st.write(f"Department: {session['department']}")
     st.write(f"Status: {session['status']}")
 
     if session["status"] == "Active":
         code, remaining = rep_live_code(sid)
         st.markdown(f"## Live Code: `{code}`")
         st.caption(f"Changes in {remaining} seconds")
-
-        if session["status"] == "Active":
-          if st.button("🛑 END ATTENDANCE"):
+if session["status"] == "Active":
+        if st.button("🛑 END ATTENDANCE"):
             sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
             save_csv(sessions, SESSIONS_FILE)
 
             safe_title = re.sub(r"[^\w\-]", "_", session["title"])
-            filename = f"attendance_{safe_title}.csv"
-            data[["name", "matric", "time"]].to_csv(filename, index=False)
+            filename = f"{DEPARTMENT}_attendance_{safe_title}.csv"
+
+            export_data = data.copy()
+            export_data["department"] = session["department"]
+
+            export_data[["department", "name", "matric", "time"]].to_csv(filename, index=False)
 
             st.success(f"CSV saved as {filename}")
             st.rerun()
 
     st.divider()
 
-    # ===== MANUAL ADD STUDENT =====
     st.subheader("Add Student Manually")
     new_name = st.text_input("Student Name")
     new_matric = st.text_input("Matric Number")
 
     if st.button("Add Student"):
-        if normalize(new_name) in records["name"].apply(normalize).values:
-            st.error("Name already exists.")
-        elif new_matric in records["matric"].values:
-            st.error("Matric already used.")
-        else:
-            records.loc[len(records)] = [sid, new_name, new_matric, now(), "rep"]
-            save_csv(records, RECORDS_FILE)
-            st.success("Student added.")
-            st.rerun()
+        records.loc[len(records)] = [sid, new_name, new_matric, now(), "rep", DEPARTMENT]
+        save_csv(records, RECORDS_FILE)
+        st.success("Student added.")
+        st.rerun()
 
-    # ===== DELETE STUDENT =====
     st.subheader("Delete Student")
     del_matric = st.text_input("Matric Number to Delete")
 
     if st.button("Delete Student"):
-        records = records[
-            ~((records["session_id"] == sid) & (records["matric"] == del_matric))
-        ]
+        records = records[~((records["session_id"] == sid) & (records["matric"] == del_matric))]
         save_csv(records, RECORDS_FILE)
         st.success("Deleted.")
         st.rerun()
 
-    # ===== VIEW RECORDS =====
     st.subheader("Attendance Records")
-    st.dataframe(data[["name", "matric", "time"]], use_container_width=True)
+    st.dataframe(data[["department", "name", "matric", "time"]], use_container_width=True)
+
 
 def main():
     if "rep" not in st.session_state:
