@@ -169,6 +169,7 @@ def rep_dashboard():
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     records = load_csv(RECORDS_FILE, RECORD_COLS)
 
+    # ===== START ATTENDANCE =====
     active_sessions = sessions[sessions["status"] == "Active"]
 
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
@@ -178,20 +179,25 @@ def rep_dashboard():
         if not active_sessions.empty:
             st.error("End current attendance first.")
         else:
+            # Clear records before new attendance
             save_csv(pd.DataFrame(columns=RECORD_COLS), RECORDS_FILE)
 
             sid = str(time.time())
             title = session_title(att_type, course)
 
-            sessions.loc[len(sessions)] = [sid, att_type, title, "Active", now(), DEPARTMENT]
+            sessions.loc[len(sessions)] = [
+                sid, att_type, title, "Active", now(), DEPARTMENT
+            ]
             save_csv(sessions, SESSIONS_FILE)
 
             write_new_code(sid)
             st.success("Attendance started — records cleared.")
             st.rerun()
 
+    # ===== SESSION SELECT =====
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     if sessions.empty:
+        st.info("No sessions yet.")
         return
 
     sid = st.selectbox(
@@ -207,7 +213,9 @@ def rep_dashboard():
     st.subheader(f"Session: {session['title']}")
     st.write(f"Department: {session['department']}")
     st.write(f"Status: {session['status']}")
-if session["status"] == "Active":
+
+    # ===== LIVE CODE =====
+    if session["status"] == "Active":
         code, remaining = rep_live_code(sid)
         st.markdown(f"## Live Code: `{code}`")
         st.caption(f"Changes in {remaining} seconds")
@@ -218,6 +226,7 @@ if session["status"] == "Active":
             st.success("Attendance ended.")
             st.rerun()
 
+    # ===== CSV DOWNLOAD =====
     if session["status"] == "Ended":
         safe_title = re.sub(r"[^\w\-]", "_", session["title"])
         filename = f"{DEPARTMENT}_{safe_title}_Attendance.csv"
@@ -236,16 +245,20 @@ if session["status"] == "Active":
 
     st.divider()
 
+    # ===== ADD STUDENT =====
     st.subheader("Add Student Manually")
     new_name = st.text_input("Student Name")
     new_matric = st.text_input("Matric Number")
 
     if st.button("Add Student"):
-        records.loc[len(records)] = [sid, new_name, new_matric, now(), "rep", DEPARTMENT]
+        records.loc[len(records)] = [
+            sid, new_name, new_matric, now(), "rep", DEPARTMENT
+        ]
         save_csv(records, RECORDS_FILE)
         st.success("Student added.")
         st.rerun()
 
+    # ===== EDIT STUDENT =====
     st.subheader("Edit Student Record")
 
     if not data.empty:
@@ -263,6 +276,7 @@ if session["status"] == "Active":
             st.success("Record updated.")
             st.rerun()
 
+    # ===== DELETE STUDENT =====
     st.subheader("Delete Student")
     del_matric = st.text_input("Matric Number to Delete")
 
@@ -274,6 +288,7 @@ if session["status"] == "Active":
         st.success("Student deleted.")
         st.rerun()
 
+    # ===== VIEW ATTENDANCE TABLE =====
     st.subheader("Attendance Records")
 
     if not data.empty:
