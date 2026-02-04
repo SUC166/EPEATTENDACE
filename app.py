@@ -51,6 +51,7 @@ def session_title(att_type, course=""):
 
 def gen_code():
     return f"{secrets.randbelow(10000):04d}"
+
 def write_new_code(session_id):
     codes = load_csv(CODES_FILE, CODE_COLS)
     code = gen_code()
@@ -83,8 +84,6 @@ def rep_live_code(session_id):
         return write_new_code(session_id), TOKEN_LIFETIME
 
     return latest["code"], int(TOKEN_LIFETIME - age)
-
-
 def student_page():
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     active = sessions[sessions["status"] == "Active"]
@@ -122,21 +121,27 @@ def student_page():
     matric = st.text_input("Matric Number (11 digits)")
 
     if st.button("Submit Attendance"):
-        if not re.fullmatch(r"\d{11}", matric):
+        if not re.fullmatch(r"\d{11}", str(matric).strip()):
             st.error("Invalid matric number.")
             return
 
+        matric = str(matric).strip()
+
         records = load_csv(RECORDS_FILE, RECORD_COLS)
 
-        if normalize(name) in records["name"].apply(normalize).values:
-            st.error("Name already exists.")
+        # ✅ Duplicate check PER SESSION (case-insensitive for names)
+        session_records = records[records["session_id"] == sid]
+
+        if normalize(name) in session_records["name"].apply(normalize).values:
+            st.error("Name already exists for this attendance.")
             return
 
-        if matric in records["matric"].values:
-            st.error("Matric already used.")
+        if matric in session_records["matric"].values:
+            st.error("Matric already used for this attendance.")
             return
 
-        if device_id() in records[records["session_id"] == sid]["device_id"].values:
+        # One entry per device per session
+        if device_id() in session_records["device_id"].values:
             st.error("One entry per device.")
             return
 
@@ -226,7 +231,7 @@ def rep_dashboard():
             st.success("Attendance ended.")
             st.rerun()
 
-    # ===== CSV DOWNLOAD (NOW WITH S/N) =====
+    # ===== CSV DOWNLOAD (WITH S/N) =====
     if session["status"] == "Ended":
         safe_title = re.sub(r"[^\w\-]", "_", session["title"])
         filename = f"{DEPARTMENT}_{safe_title}_Attendance.csv"
@@ -234,7 +239,7 @@ def rep_dashboard():
         export_data = data.copy()
         export_data["department"] = session["department"]
 
-        # Add S/N column (1,2,3...)
+        # Add S/N column
         export_data.insert(0, "S/N", range(1, len(export_data) + 1))
 
         csv_bytes = export_data[
@@ -256,14 +261,34 @@ def rep_dashboard():
     new_matric = st.text_input("Matric Number")
 
     if st.button("Add Student"):
+        if not new_name.strip():
+            st.error("Enter student name.")
+            return
+
+        if not re.fullmatch(r"\d{11}", str(new_matric).strip()):
+            st.error("Matric number must be 11 digits.")
+            return
+
+        new_matric = str(new_matric).strip()
+
+        # Duplicate check PER SESSION
+        session_records = records[records["session_id"] == sid]
+
+        if normalize(new_name) in session_records["name"].apply(normalize).values:
+            st.error("Name already exists for this attendance.")
+            return
+
+        if new_matric in session_records["matric"].values:
+            st.error("Matric already used for this attendance.")
+            return
+
         records.loc[len(records)] = [
             sid, new_name, new_matric, now(), "rep", DEPARTMENT
         ]
         save_csv(records, RECORDS_FILE)
         st.success("Student added.")
         st.rerun()
-
-    # ===== EDIT STUDENT =====
+# ===== EDIT STUDENT =====
     st.subheader("Edit Student Record")
 
     if not data.empty:
@@ -272,6 +297,29 @@ def rep_dashboard():
         edit_matric = st.text_input("Edit Matric")
 
         if st.button("Update Record"):
+            if not edit_name.strip():
+                st.error("Enter a valid name.")
+                return
+
+            if not re.fullmatch(r"\d{11}", str(edit_matric).strip()):
+                st.error("Matric number must be 11 digits.")
+                return
+
+            edit_matric = str(edit_matric).strip()
+
+            # Records for this session excluding the currently selected student
+            session_records = records[records["session_id"] == sid]
+            others = session_records[session_records["matric"] != selected]
+
+            # Prevent duplicates after edit (case-insensitive name)
+            if normalize(edit_name) in others["name"].apply(normalize).values:
+                st.error("Another student already has this name in this attendance.")
+                return
+
+            if edit_matric in others["matric"].values:
+                st.error("Another student already has this matric number in this attendance.")
+                return
+
             records.loc[
                 (records["session_id"] == sid) & (records["matric"] == selected),
                 ["name", "matric"]
@@ -280,7 +328,8 @@ def rep_dashboard():
             save_csv(records, RECORDS_FILE)
             st.success("Record updated.")
             st.rerun()
-# ===== DELETE STUDENT =====
+
+    # ===== DELETE STUDENT =====
     st.subheader("Delete Student")
     del_matric = st.text_input("Matric Number to Delete")
 
@@ -292,7 +341,7 @@ def rep_dashboard():
         st.success("Student deleted.")
         st.rerun()
 
-    # ===== VIEW TABLE (NOW WITH S/N) =====
+    # ===== VIEW TABLE (WITH S/N) =====
     st.subheader("Attendance Records")
 
     view_data = data.copy()
@@ -302,7 +351,6 @@ def rep_dashboard():
         view_data[["S/N", "department", "name", "matric", "time"]],
         use_container_width=True
     )
-
 
 
 def main():
