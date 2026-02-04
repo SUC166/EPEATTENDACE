@@ -65,6 +65,18 @@ def code_valid(session_id, entered_code):
     age = (datetime.now() - latest["created_at"]).total_seconds()
     return str(entered_code).zfill(4) == str(latest["code"]).zfill(4) and age <= TOKEN_LIFETIME
 
+def rep_live_code(session_id):
+    latest = get_latest_code(session_id)
+    if latest is None:
+        return write_new_code(session_id), TOKEN_LIFETIME
+
+    age = (datetime.now() - latest["created_at"]).total_seconds()
+    if age >= TOKEN_LIFETIME:
+        return write_new_code(session_id), TOKEN_LIFETIME
+
+    return latest["code"], int(TOKEN_LIFETIME - age)
+
+
 def student_page():
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     active = sessions[sessions["status"] == "Active"]
@@ -91,14 +103,13 @@ def student_page():
             st.rerun()
         return
 
-    # Attendance info
     st.markdown("### 📘 Attendance Details")
-    st.write(f"**Title / Course:** {session['title']}")
+    st.write(f"**Course / Title:** {session['title']}")
     st.write(f"**Date:** {session['created_at'].split(' ')[0]}")
     st.divider()
 
-    st.caption("📌 Naming format: **Surname Firstname Middlename**")
-    name = st.text_input("Full Name (Surname Firstname Middlename)")
+    st.caption("📌 Naming format: Surname Firstname Middlename")
+    name = st.text_input("Full Name")
     matric = st.text_input("Matric Number (11 digits)")
 
     if st.button("Submit Attendance"):
@@ -137,11 +148,12 @@ def rep_login():
             st.rerun()
         else:
             st.error("Wrong login")
+
+
 def rep_dashboard():
     st_autorefresh(interval=1000, key="refresh")
     st.title("Course Rep Dashboard")
 
-    # ===== START ATTENDANCE =====
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
     course = st.text_input("Course Code") if att_type == "Per Subject" else ""
 
@@ -149,18 +161,14 @@ def rep_dashboard():
         sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
         sid = str(time.time())
         title = session_title(att_type, course)
-
         sessions.loc[len(sessions)] = [sid, att_type, title, "Active", now()]
         save_csv(sessions, SESSIONS_FILE)
         write_new_code(sid)
-
         st.success("Attendance started.")
         st.rerun()
 
-    # ===== LOAD SESSIONS =====
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     if sessions.empty:
-        st.info("No sessions available.")
         return
 
     sid = st.selectbox(
@@ -170,23 +178,18 @@ def rep_dashboard():
     )
 
     session = sessions[sessions["session_id"] == sid].iloc[0]
-
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     data = records[records["session_id"] == sid]
 
-    st.divider()
     st.subheader(f"Session: {session['title']}")
-    st.write(f"**Status:** {session['status']}")
+    st.write(f"Status: {session['status']}")
 
-    # ===== LIVE CODE (FIXED) =====
     if session["status"] == "Active":
         code, remaining = rep_live_code(sid)
         st.markdown(f"## Live Code: `{code}`")
         st.caption(f"Changes in {remaining} seconds")
-
-    # ===== END ATTENDANCE =====
-    if session["status"] == "Active":
-        if st.button("🛑 END ATTENDANCE", use_container_width=True):
+if session["status"] == "Active":
+        if st.button("🛑 END ATTENDANCE"):
             sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
             save_csv(sessions, SESSIONS_FILE)
 
@@ -194,55 +197,45 @@ def rep_dashboard():
             filename = f"attendance_{safe_title}.csv"
             data[["name", "matric", "time"]].to_csv(filename, index=False)
 
-            st.success(f"Attendance ended. CSV saved as {filename}")
+            st.success(f"CSV saved as {filename}")
             st.rerun()
 
     st.divider()
 
-    # ===== MANUAL ADD STUDENT (RESTORED) =====
     st.subheader("Add Student Manually")
     new_name = st.text_input("Student Name")
     new_matric = st.text_input("Matric Number")
 
     if st.button("Add Student"):
-        if normalize(new_name) in records["name"].apply(normalize).values:
-            st.error("Name already exists.")
-        elif new_matric in records["matric"].values:
-            st.error("Matric already used.")
-        else:
-            records.loc[len(records)] = [sid, new_name, new_matric, now(), "rep"]
-            save_csv(records, RECORDS_FILE)
-            st.success("Student added.")
-            st.rerun()
+        records.loc[len(records)] = [sid, new_name, new_matric, now(), "rep"]
+        save_csv(records, RECORDS_FILE)
+        st.success("Student added.")
+        st.rerun()
 
-    # ===== DELETE STUDENT (RESTORED) =====
-    st.subheader("Delete Student Entry")
+    st.subheader("Delete Student")
     del_matric = st.text_input("Matric Number to Delete")
 
     if st.button("Delete Student"):
-        records = records[
-            ~((records["session_id"] == sid) & (records["matric"] == del_matric))
-        ]
+        records = records[~((records["session_id"] == sid) & (records["matric"] == del_matric))]
         save_csv(records, RECORDS_FILE)
-        st.success("Student deleted.")
+        st.success("Deleted.")
         st.rerun()
 
-    # ===== ATTENDANCE RECORDS =====
     st.subheader("Attendance Records")
-    if data.empty:
-        st.info("No attendance records yet.")
-    else:
-        st.dataframe(data[["name", "matric", "time"]], use_container_width=True)
+    st.dataframe(data[["name", "matric", "time"]], use_container_width=True)
+
 
 def main():
     if "rep" not in st.session_state:
         st.session_state.rep = False
 
     page = st.sidebar.selectbox("Page", ["Student", "Course Rep"])
+
     if page == "Student":
         student_page()
     else:
         rep_login() if not st.session_state.rep else rep_dashboard()
+
 
 if __name__ == "__main__":
     main()
