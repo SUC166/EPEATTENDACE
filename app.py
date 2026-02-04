@@ -190,7 +190,7 @@ def rep_dashboard():
         st.caption(f"Changes in {remaining} seconds")
 
         if session["status"] == "Active":
-        if st.button("🛑 END ATTENDANCE"):
+          if st.button("🛑 END ATTENDANCE"):
             sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
             save_csv(sessions, SESSIONS_FILE)
 
