@@ -188,7 +188,8 @@ def rep_dashboard():
         code, remaining = rep_live_code(sid)
         st.markdown(f"## Live Code: `{code}`")
         st.caption(f"Changes in {remaining} seconds")
-if session["status"] == "Active":
+
+        if session["status"] == "Active":
         if st.button("🛑 END ATTENDANCE"):
             sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
             save_csv(sessions, SESSIONS_FILE)
@@ -202,28 +203,37 @@ if session["status"] == "Active":
 
     st.divider()
 
+    # ===== MANUAL ADD STUDENT =====
     st.subheader("Add Student Manually")
     new_name = st.text_input("Student Name")
     new_matric = st.text_input("Matric Number")
 
     if st.button("Add Student"):
-        records.loc[len(records)] = [sid, new_name, new_matric, now(), "rep"]
-        save_csv(records, RECORDS_FILE)
-        st.success("Student added.")
-        st.rerun()
+        if normalize(new_name) in records["name"].apply(normalize).values:
+            st.error("Name already exists.")
+        elif new_matric in records["matric"].values:
+            st.error("Matric already used.")
+        else:
+            records.loc[len(records)] = [sid, new_name, new_matric, now(), "rep"]
+            save_csv(records, RECORDS_FILE)
+            st.success("Student added.")
+            st.rerun()
 
+    # ===== DELETE STUDENT =====
     st.subheader("Delete Student")
     del_matric = st.text_input("Matric Number to Delete")
 
     if st.button("Delete Student"):
-        records = records[~((records["session_id"] == sid) & (records["matric"] == del_matric))]
+        records = records[
+            ~((records["session_id"] == sid) & (records["matric"] == del_matric))
+        ]
         save_csv(records, RECORDS_FILE)
         st.success("Deleted.")
         st.rerun()
 
+    # ===== VIEW RECORDS =====
     st.subheader("Attendance Records")
     st.dataframe(data[["name", "matric", "time"]], use_container_width=True)
-
 
 def main():
     if "rep" not in st.session_state:
