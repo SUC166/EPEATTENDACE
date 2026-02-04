@@ -3,14 +3,13 @@ import pandas as pd
 import os, re, time, secrets, hashlib
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
-from zoneinfo import ZoneInfo
 
 TOKEN_LIFETIME = 20
-TIMEZONE = ZoneInfo("Africa/Lagos")
 
+# ===== CHANGE THIS DEPARTMENT =====
 DEPARTMENT = "EPE"
 
-# HASHED LOGIN — test / pass
+# ===== REPLACE WITH YOUR HASHES =====
 REP_USERNAME_HASH = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 REP_PASSWORD_HASH = "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1"
 
@@ -32,7 +31,7 @@ def normalize(txt):
     return re.sub(r"\s+", " ", str(txt).strip()).lower()
 
 def now():
-    return datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 def sha256_hash(text):
     return hashlib.sha256(text.encode()).hexdigest()
@@ -44,8 +43,8 @@ def device_id():
     return st.session_state.device_id
 
 def session_title(att_type, course=""):
-    d = datetime.now(TIMEZONE)
-    base = d.strftime('%Y-%m-%d %H:%M')
+    d = datetime.now()
+    base = f"{d.strftime('%Y-%m-%d %H:%M')}"
     if att_type == "Per Subject":
         return f"{DEPARTMENT} - {course} {base}"
     return f"{DEPARTMENT} - Daily {base}"
@@ -62,52 +61,29 @@ def write_new_code(session_id):
 def get_latest_code(session_id):
     codes = load_csv(CODES_FILE, CODE_COLS)
     codes = codes[codes["session_id"] == str(session_id)]
-
     if codes.empty:
         return None
-
-    codes["created_at"] = pd.to_datetime(codes["created_at"], errors="coerce")
-    codes = codes.dropna(subset=["created_at"])
-
-    if codes.empty:
-        return None
-
+    codes["created_at"] = pd.to_datetime(codes["created_at"])
     return codes.sort_values("created_at").iloc[-1]
-    
+
 def code_valid(session_id, entered_code):
     latest = get_latest_code(session_id)
     if latest is None:
         return False
-    age = (datetime.now(TIMEZONE) - latest["created_at"]).total_seconds()
+    age = (datetime.now() - latest["created_at"]).total_seconds()
     return str(entered_code).zfill(4) == str(latest["code"]).zfill(4) and age <= TOKEN_LIFETIME
 
 def rep_live_code(session_id):
     latest = get_latest_code(session_id)
-
-    # If no code exists yet, create one now
     if latest is None:
         return write_new_code(session_id), TOKEN_LIFETIME
 
-    # Convert created_at safely to timezone-aware datetime
-    created = pd.to_datetime(latest["created_at"], errors="coerce")
-
-    # If parsing failed, reset code
-    if pd.isna(created):
-        return write_new_code(session_id), TOKEN_LIFETIME
-
-    # Force timezone awareness (Africa/Lagos)
-    if created.tzinfo is None:
-        created = created.tz_localize(TIMEZONE)
-    else:
-        created = created.tz_convert(TIMEZONE)
-
-    age = (datetime.now(TIMEZONE) - created).total_seconds()
-
-    # If expired, generate a new code
+    age = (datetime.now() - latest["created_at"]).total_seconds()
     if age >= TOKEN_LIFETIME:
         return write_new_code(session_id), TOKEN_LIFETIME
 
-    return str(latest["code"]).zfill(4), int(TOKEN_LIFETIME - age)
+    return latest["code"], int(TOKEN_LIFETIME - age)
+
 
 def student_page():
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
@@ -177,13 +153,15 @@ def rep_login():
     p = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if sha256_hash(u) == REP_USERNAME_HASH and sha256_hash(p) == REP_PASSWORD_HASH:
+        u_hash = sha256_hash(u)
+        p_hash = sha256_hash(p)
+
+        if u_hash == REP_USERNAME_HASH and p_hash == REP_PASSWORD_HASH:
             st.session_state.rep = True
             st.success("Login successful.")
             st.rerun()
         else:
             st.error("Invalid login credentials.")
-
 
 def rep_dashboard():
     st_autorefresh(interval=1000, key="refresh")
@@ -192,8 +170,10 @@ def rep_dashboard():
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     records = load_csv(RECORDS_FILE, RECORD_COLS)
 
-    # ===== START ATTENDANCE =====
     active_sessions = sessions[sessions["status"] == "Active"]
+
+    if not active_sessions.empty:
+        st.warning("⚠️ Attendance is ACTIVE. End it before starting a new one.")
 
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
     course = st.text_input("Course Code") if att_type == "Per Subject" else ""
@@ -202,7 +182,6 @@ def rep_dashboard():
         if not active_sessions.empty:
             st.error("End current attendance first.")
         else:
-            # Clear records before new attendance
             save_csv(pd.DataFrame(columns=RECORD_COLS), RECORDS_FILE)
 
             sid = str(time.time())
@@ -217,10 +196,8 @@ def rep_dashboard():
             st.success("Attendance started — records cleared.")
             st.rerun()
 
-    # ===== SESSION SELECT =====
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     if sessions.empty:
-        st.info("No sessions yet.")
         return
 
     sid = st.selectbox(
@@ -249,15 +226,20 @@ def rep_dashboard():
             st.success("Attendance ended.")
             st.rerun()
 
-    # ===== CSV DOWNLOAD =====
+    # ===== CSV DOWNLOAD (NOW WITH S/N) =====
     if session["status"] == "Ended":
         safe_title = re.sub(r"[^\w\-]", "_", session["title"])
         filename = f"{DEPARTMENT}_{safe_title}_Attendance.csv"
 
-        export_data = data[["department", "name", "matric", "time"]].copy()
+        export_data = data.copy()
+        export_data["department"] = session["department"]
+
+        # Add S/N column (1,2,3...)
         export_data.insert(0, "S/N", range(1, len(export_data) + 1))
 
-        csv_bytes = export_data.to_csv(index=False).encode()
+        csv_bytes = export_data[
+            ["S/N", "department", "name", "matric", "time"]
+        ].to_csv(index=False).encode()
 
         st.download_button(
             "📥 Download Attendance CSV",
@@ -298,8 +280,7 @@ def rep_dashboard():
             save_csv(records, RECORDS_FILE)
             st.success("Record updated.")
             st.rerun()
-
-    # ===== DELETE STUDENT =====
+# ===== DELETE STUDENT =====
     st.subheader("Delete Student")
     del_matric = st.text_input("Matric Number to Delete")
 
@@ -311,15 +292,17 @@ def rep_dashboard():
         st.success("Student deleted.")
         st.rerun()
 
-    # ===== VIEW ATTENDANCE TABLE =====
+    # ===== VIEW TABLE (NOW WITH S/N) =====
     st.subheader("Attendance Records")
 
-    if not data.empty:
-        display_df = data[["department", "name", "matric", "time"]].copy()
-        display_df.insert(0, "S/N", range(1, len(display_df) + 1))
-        st.dataframe(display_df, use_container_width=True)
-    else:
-        st.info("No attendance yet.")
+    view_data = data.copy()
+    view_data.insert(0, "S/N", range(1, len(view_data) + 1))
+
+    st.dataframe(
+        view_data[["S/N", "department", "name", "matric", "time"]],
+        use_container_width=True
+    )
+
 
 
 def main():
