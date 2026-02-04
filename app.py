@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os, re, time, secrets, hashlib
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from streamlit_autorefresh import st_autorefresh
 
 TOKEN_LIFETIME = 20
@@ -21,6 +21,19 @@ SESSION_COLS = ["session_id", "type", "title", "status", "created_at", "departme
 RECORD_COLS = ["session_id", "name", "matric", "time", "device_id", "department"]
 CODE_COLS = ["session_id", "code", "created_at"]
 
+# ==============================
+# ✅ TIMEZONE FIX (Nigeria/WAT)
+# WAT = UTC+1
+# ==============================
+WAT = timezone(timedelta(hours=1))
+
+def local_now_dt():
+    """Timezone-aware datetime in WAT (Nigeria)."""
+    return datetime.now(WAT)
+
+def now():
+    """String timestamp stored in CSV (WAT)."""
+    return local_now_dt().strftime("%Y-%m-%d %H:%M:%S")
 def load_csv(file, cols):
     return pd.read_csv(file, dtype=str) if os.path.exists(file) else pd.DataFrame(columns=cols)
 
@@ -29,9 +42,6 @@ def save_csv(df, file):
 
 def normalize(txt):
     return re.sub(r"\s+", " ", str(txt).strip()).lower()
-
-def now():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 def sha256_hash(text):
     return hashlib.sha256(text.encode()).hexdigest()
@@ -43,7 +53,7 @@ def device_id():
     return st.session_state.device_id
 
 def session_title(att_type, course=""):
-    d = datetime.now()
+    d = local_now_dt()
     base = f"{d.strftime('%Y-%m-%d %H:%M')}"
     if att_type == "Per Subject":
         return f"{DEPARTMENT} - {course} {base}"
@@ -64,26 +74,29 @@ def get_latest_code(session_id):
     codes = codes[codes["session_id"] == str(session_id)]
     if codes.empty:
         return None
-    codes["created_at"] = pd.to_datetime(codes["created_at"])
+
+    # parse and force WAT timezone
+    codes["created_at"] = pd.to_datetime(codes["created_at"], errors="coerce")
+    codes["created_at"] = codes["created_at"].dt.tz_localize(WAT, nonexistent="shift_forward", ambiguous="NaT")
+
     return codes.sort_values("created_at").iloc[-1]
 
 def code_valid(session_id, entered_code):
     latest = get_latest_code(session_id)
-    if latest is None:
+    if latest is None or pd.isna(latest["created_at"]):
         return False
-    age = (datetime.now() - latest["created_at"]).total_seconds()
+
+    age = (local_now_dt() - latest["created_at"]).total_seconds()
     return str(entered_code).zfill(4) == str(latest["code"]).zfill(4) and age <= TOKEN_LIFETIME
 
 def rep_live_code(session_id):
     latest = get_latest_code(session_id)
-    if latest is None:
+    if latest is None or pd.isna(latest["created_at"]):
         return write_new_code(session_id), TOKEN_LIFETIME
 
-    age = (datetime.now() - latest["created_at"]).total_seconds()
+    age = (local_now_dt() - latest["created_at"]).total_seconds()
     if age >= TOKEN_LIFETIME:
         return write_new_code(session_id), TOKEN_LIFETIME
-
-    return latest["code"], int(TOKEN_LIFETIME - age)
 def student_page():
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     active = sessions[sessions["status"] == "Active"]
@@ -151,6 +164,8 @@ def student_page():
 
     st.divider()
     st.caption("💙 made with love EPE2025/26")
+
+    return latest["code"], int(TOKEN_LIFETIME - age)
 def rep_login():
     st.title("Course Rep Login")
 
@@ -288,7 +303,8 @@ def rep_dashboard():
         save_csv(records, RECORDS_FILE)
         st.success("Student added.")
         st.rerun()
-# ===== EDIT STUDENT =====
+
+    # ===== EDIT STUDENT =====
     st.subheader("Edit Student Record")
 
     if not data.empty:
@@ -352,7 +368,6 @@ def rep_dashboard():
         use_container_width=True
     )
 
-
 def main():
     if "rep" not in st.session_state:
         st.session_state.rep = False
@@ -363,7 +378,6 @@ def main():
         student_page()
     else:
         rep_login() if not st.session_state.rep else rep_dashboard()
-
 
 if __name__ == "__main__":
     main()
