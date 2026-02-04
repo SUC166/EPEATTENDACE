@@ -137,11 +137,11 @@ def rep_login():
             st.rerun()
         else:
             st.error("Wrong login")
-
 def rep_dashboard():
     st_autorefresh(interval=1000, key="refresh")
     st.title("Course Rep Dashboard")
 
+    # ===== START ATTENDANCE =====
     att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
     course = st.text_input("Course Code") if att_type == "Per Subject" else ""
 
@@ -149,14 +149,18 @@ def rep_dashboard():
         sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
         sid = str(time.time())
         title = session_title(att_type, course)
+
         sessions.loc[len(sessions)] = [sid, att_type, title, "Active", now()]
         save_csv(sessions, SESSIONS_FILE)
         write_new_code(sid)
+
         st.success("Attendance started.")
         st.rerun()
 
+    # ===== LOAD SESSIONS =====
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     if sessions.empty:
+        st.info("No sessions available.")
         return
 
     sid = st.selectbox(
@@ -166,13 +170,25 @@ def rep_dashboard():
     )
 
     session = sessions[sessions["session_id"] == sid].iloc[0]
+
     records = load_csv(RECORDS_FILE, RECORD_COLS)
     data = records[records["session_id"] == sid]
-if session["status"] == "Active":
-        latest = get_latest_code(sid)
-        st.markdown(f"## Live Code: `{latest['code']}`")
 
-        if st.button("🛑 END ATTENDANCE"):
+    st.divider()
+    st.subheader(f"Session: {session['title']}")
+    st.write(f"**Status:** {session['status']}")
+
+    # ===== LIVE CODE =====
+    if session["status"] == "Active":
+        latest = get_latest_code(sid)
+        if latest is not None:
+            remaining = TOKEN_LIFETIME - (datetime.now() - latest["created_at"]).total_seconds()
+            st.markdown(f"## Live Code: `{latest['code']}`")
+            st.caption(f"Changes in {max(0, int(remaining))} seconds")
+
+    # ===== END ATTENDANCE =====
+    if session["status"] == "Active":
+        if st.button("🛑 END ATTENDANCE", use_container_width=True):
             sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
             save_csv(sessions, SESSIONS_FILE)
 
@@ -183,9 +199,15 @@ if session["status"] == "Active":
             st.success(f"Attendance ended. CSV saved as {filename}")
             st.rerun()
 
+    st.divider()
+
+    # ===== ATTENDANCE RECORDS =====
     st.subheader("Attendance Records")
-    if not data.empty:
-        st.dataframe(data[["name", "matric", "time"]])
+
+    if data.empty:
+        st.info("No attendance records yet.")
+    else:
+        st.dataframe(data[["name", "matric", "time"]], use_container_width=True)
 
 def main():
     if "rep" not in st.session_state:
