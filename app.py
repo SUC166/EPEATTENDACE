@@ -73,7 +73,7 @@ fingerprint_data = st_javascript("""
 }
 """)
 
-if fingerprint_data is None:
+if not isinstance(fingerprint_data, dict):
     fingerprint_data = {
         "userAgent": "unknown",
         "platform": "unknown",
@@ -83,7 +83,7 @@ if fingerprint_data is None:
         "screenHeight": 0,
         "pixelRatio": 1
     }
-
+    
 def generate_fingerprint(data):
     # Ensure data is a dictionary
     if not isinstance(data, dict):
