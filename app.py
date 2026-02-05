@@ -168,6 +168,28 @@ def rep_login():
 
 def save_records(df):
     df.to_csv(RECORDS_FILE, index=False)
+
+def load_sessions():
+    if os.path.exists(SESSIONS_FILE):
+        try:
+            return pd.read_csv(SESSIONS_FILE)
+        except:
+            return pd.DataFrame(columns=[
+                "session_id",
+                "title",
+                "department",
+                "status",
+                "created_at"
+            ])
+    return pd.DataFrame(columns=[
+        "session_id",
+        "title",
+        "department",
+        "status",
+        "created_at"
+    ])
+
+
 def rep_dashboard():
     st.title("EPE Course Rep Dashboard")
 
