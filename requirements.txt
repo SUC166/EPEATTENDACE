@@ -4,3 +4,8 @@ altair>=5.0
 qrcode
 pillow
 streamlit-autorefresh
+numpy
+python-dateutil
+pytz
+extra-streamlit-components
+streamlit-javascript
