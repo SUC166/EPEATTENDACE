@@ -55,7 +55,6 @@ def session_title(att_type, course=""):
 def gen_code():
     return f"{secrets.randbelow(10000):04d}"
 
-
 def write_new_code(session_id):
     codes = load_csv(CODES_FILE, CODE_COLS)
     code = gen_code()
@@ -89,6 +88,83 @@ def rep_live_code(session_id):
 
     return latest["code"], int(TOKEN_LIFETIME - age)
 
+def student_page():
+    sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
+    active = sessions[sessions["status"] == "Active"]
+
+    if active.empty:
+        st.info("No active attendance.")
+        return
+
+    session = active.iloc[-1]
+    sid = session["session_id"]
+
+    if "active_session" not in st.session_state:
+        st.session_state.active_session = None
+
+    if st.session_state.active_session != sid:
+        st.title("Enter Attendance Code")
+        code = st.text_input("4-Digit Live Code")
+
+        if st.button("Continue"):
+            if not code_valid(sid, code):
+                st.error("Invalid or expired code.")
+                return
+            st.session_state.active_session = sid
+            st.rerun()
+        return
+
+    st.markdown("### 📘 Attendance Details")
+    st.write(f"**Department:** {session['department']}")
+    st.write(f"**Course / Title:** {session['title']}")
+    st.write(f"**Date:** {session['created_at'].split(' ')[0]}")
+    st.divider()
+
+    st.caption("📌 Naming format: Surname Firstname Middlename")
+    name = st.text_input("Full Name")
+    matric = st.text_input("Matric Number (11 digits)")
+
+    if st.button("Submit Attendance"):
+        if not re.fullmatch(r"\d{11}", str(matric).strip()):
+            st.error("Invalid matric number.")
+            return
+
+        records = load_csv(RECORDS_FILE, RECORD_COLS)
+        session_records = records[records["session_id"] == sid]
+
+        if normalize(name) in session_records["name"].apply(normalize).values:
+            st.error("Name already exists.")
+            return
+
+        if matric in session_records["matric"].values:
+            st.error("Matric already used.")
+            return
+
+        if device_id() in session_records["device_id"].values:
+            st.error("One entry per device.")
+            return
+
+        records.loc[len(records)] = [sid, name, matric, now(), device_id(), DEPARTMENT]
+        save_csv(records, RECORDS_FILE)
+        st.success("Attendance recorded.")
+
+    st.divider()
+    st.caption("💙 made with love EPE2025/26")
+
+
+def rep_login():
+    st.title("Course Rep Login")
+
+    u = st.text_input("Username")
+    p = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if sha256_hash(u) == REP_USERNAME_HASH and sha256_hash(p) == REP_PASSWORD_HASH:
+            st.session_state.rep = True
+            st.success("Login successful.")
+            st.rerun()
+        else:
+            st.error("Invalid login credentials.")
 
 def rep_dashboard():
     st_autorefresh(interval=1000, key="refresh")
@@ -105,20 +181,17 @@ def rep_dashboard():
     course = st.text_input("Course Code") if att_type == "Per Subject" else ""
 
     if st.button("Start Attendance"):
-        if not active_sessions.empty:
-            st.error("End current attendance first.")
-        else:
+        if active_sessions.empty:
             save_csv(pd.DataFrame(columns=RECORD_COLS), RECORDS_FILE)
             sid = str(time.time())
             title = session_title(att_type, course)
-
-            sessions.loc[len(sessions)] = [
-                sid, att_type, title, "Active", now(), DEPARTMENT
-            ]
+            sessions.loc[len(sessions)] = [sid, att_type, title, "Active", now(), DEPARTMENT]
             save_csv(sessions, SESSIONS_FILE)
             write_new_code(sid)
-            st.success("Attendance started — records cleared.")
+            st.success("Attendance started.")
             st.rerun()
+        else:
+            st.error("End current attendance first.")
 
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     if sessions.empty:
@@ -133,7 +206,6 @@ def rep_dashboard():
     session = sessions[sessions["session_id"] == sid].iloc[0]
     data = records[records["session_id"] == sid]
 
-    st.divider()
     st.subheader(f"Session: {session['title']}")
     st.write(f"Department: {session['department']}")
     st.write(f"Status: {session['status']}")
@@ -165,7 +237,6 @@ def rep_dashboard():
     view = data.copy()
     view.insert(0, "S/N", range(1, len(view) + 1))
     st.dataframe(view, use_container_width=True)
-
 def main():
     if "rep" not in st.session_state:
         st.session_state.rep = False
