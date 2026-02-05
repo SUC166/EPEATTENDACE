@@ -1,251 +1,335 @@
+# =====================================
+# ULASv4 — PART 1
+# Core Imports, Config, Identity Layer
+# =====================================
+
 import streamlit as st
 import pandas as pd
-import os, re, time, secrets, hashlib
-from datetime import datetime, timedelta, timezone
-from streamlit_autorefresh import st_autorefresh
+import numpy as np
+import hashlib
+import uuid
+import secrets
+import datetime
+import pytz
+import os
 
-# ===== TIMEZONE (UTC +1 NIGERIA) =====
-WAT = timezone(timedelta(hours=1))
+from streamlit_javascript import st_javascript
+import extra_streamlit_components as stx
 
-TOKEN_LIFETIME = 20
-DEPARTMENT = "EPE"
+# =====================================
+# APP CONFIG
+# =====================================
 
-REP_USERNAME_HASH = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
-REP_PASSWORD_HASH = "d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1"
+st.set_page_config(
+    page_title="ULASv4",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-SESSIONS_FILE = "sessions.csv"
-RECORDS_FILE = "records.csv"
-CODES_FILE = "codes.csv"
+DATA_FILE = "attendance_records.csv"
+COOKIE_NAME = "ulas_browser_id"
+COOKIE_EXPIRY_DAYS = 90
 
-SESSION_COLS = ["session_id", "type", "title", "status", "created_at", "department"]
-RECORD_COLS = ["session_id", "name", "matric", "time", "device_id", "department"]
-CODE_COLS = ["session_id", "code", "created_at"]
+cookie_manager = stx.CookieManager()
 
-def load_csv(file, cols):
-    return pd.read_csv(file, dtype=str) if os.path.exists(file) else pd.DataFrame(columns=cols)
+# =====================================
+# COOKIE — BROWSER ID
+# =====================================
 
-def save_csv(df, file):
-    df.to_csv(file, index=False)
+def get_or_create_browser_id():
+    cookies = cookie_manager.get_all()
 
-def now():
-    return datetime.now(WAT).strftime("%Y-%m-%d %H:%M:%S")
+    if COOKIE_NAME in cookies:
+        return cookies[COOKIE_NAME]
 
-def normalize(t):
-    return re.sub(r"\s+", " ", str(t).strip()).lower()
+    new_id = secrets.token_hex(16)
+    expiry = datetime.datetime.utcnow() + datetime.timedelta(days=COOKIE_EXPIRY_DAYS)
 
-def sha256_hash(t):
-    return hashlib.sha256(t.encode()).hexdigest()
+    cookie_manager.set(
+        COOKIE_NAME,
+        new_id,
+        expires_at=expiry
+    )
 
-def device_id():
-    if "device_id" not in st.session_state:
-        raw = f"{time.time()}{secrets.token_hex()}"
-        st.session_state.device_id = hashlib.sha256(raw.encode()).hexdigest()
-    return st.session_state.device_id
+    return new_id
 
-def gen_code():
-    return f"{secrets.randbelow(10000):04d}"
+browser_id = get_or_create_browser_id()
 
-def session_title(att_type, course=""):
-    base = datetime.now(WAT).strftime("%Y-%m-%d %H:%M")
-    return f"{DEPARTMENT} - {course} {base}" if att_type == "Per Subject" else f"{DEPARTMENT} - Daily {base}"
+# =====================================
+# JAVASCRIPT — DEVICE FINGERPRINT DATA
+# =====================================
 
-def write_new_code(sid):
-    codes = load_csv(CODES_FILE, CODE_COLS)
-    codes.loc[len(codes)] = [sid, gen_code(), now()]
-    save_csv(codes, CODES_FILE)
-    return codes.iloc[-1]["code"]
+fingerprint_data = st_javascript("""
+() => {
+    return {
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        language: navigator.language,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        screenWidth: screen.width,
+        screenHeight: screen.height,
+        pixelRatio: window.devicePixelRatio || 1
+    };
+}
+""")
 
-def latest_code(sid):
-    codes = load_csv(CODES_FILE, CODE_COLS)
-    c = codes[codes["session_id"] == sid]
-    if c.empty:
-        return None
-    c["created_at"] = pd.to_datetime(c["created_at"])
-    return c.sort_values("created_at").iloc[-1]
+if fingerprint_data is None:
+    fingerprint_data = {
+        "userAgent": "unknown",
+        "platform": "unknown",
+        "language": "unknown",
+        "timezone": "unknown",
+        "screenWidth": 0,
+        "screenHeight": 0,
+        "pixelRatio": 1
+    }
 
-def rep_live_code(sid):
-    c = latest_code(sid)
-    if c is None:
-        return write_new_code(sid), TOKEN_LIFETIME
+def generate_fingerprint(data):
+    raw = (
+        str(data.get("userAgent")) +
+        str(data.get("platform")) +
+        str(data.get("language")) +
+        str(data.get("timezone")) +
+        str(data.get("screenWidth")) +
+        str(data.get("screenHeight")) +
+        str(data.get("pixelRatio"))
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
 
-    age = (datetime.now(WAT).replace(tzinfo=None) - c["created_at"]).total_seconds()
-    if age >= TOKEN_LIFETIME:
-        return write_new_code(sid), TOKEN_LIFETIME
+fingerprint_hash = generate_fingerprint(fingerprint_data)
 
-    return c["code"], int(TOKEN_LIFETIME - age)
+# =====================================
+# SESSION STATE CORE
+# =====================================
 
-def code_valid(sid, entered):
-    c = latest_code(sid)
-    if c is None:
-        return False
-    age = (datetime.now(WAT).replace(tzinfo=None) - c["created_at"]).total_seconds()
-    return str(entered).zfill(4) == str(c["code"]).zfill(4) and age <= TOKEN_LIFETIME
+if "browser_id" not in st.session_state:
+    st.session_state.browser_id = browser_id
+
+if "fingerprint" not in st.session_state:
+    st.session_state.fingerprint = fingerprint_hash
+
+if "risk_score" not in st.session_state:
+    st.session_state.risk_score = 0
+
+
+# =====================================
+# ULASv4 — PART 2
+# Storage + Schema + UUID Records
+# =====================================
+
+BASE_COLUMNS = [
+    "record_id",
+    "name",
+    "matric",
+    "course",
+    "session_id",
+    "timestamp",
+    "browser_id",
+    "fingerprint",
+    "risk_score",
+    "flagged"
+]
+
+def initialize_csv():
+    if not os.path.exists(DATA_FILE):
+        df = pd.DataFrame(columns=BASE_COLUMNS)
+        df.to_csv(DATA_FILE, index=False)
+
+initialize_csv()
+
+def load_records():
+    return pd.read_csv(DATA_FILE)
+
+def save_records(df):
+    df.to_csv(DATA_FILE, index=False)
+
+
+# =====================================
+# ULASv4 — PART 3
+# Proxy Risk Detection Engine
+# =====================================
+
+def calculate_risk_score(df, new_entry):
+    score = 0
+
+    # Same fingerprint marking multiple students
+    same_fp = df[df["fingerprint"] == new_entry["fingerprint"]]
+    if len(same_fp) >= 2:
+        score += 30
+
+    # Same browser marking multiple names
+    same_browser = df[df["browser_id"] == new_entry["browser_id"]]
+    if len(same_browser) >= 3:
+        score += 25
+
+    # Rapid submissions
+    if not df.empty:
+        try:
+            last_time = pd.to_datetime(df.iloc[-1]["timestamp"])
+            now = datetime.datetime.utcnow()
+            if (now - last_time).total_seconds() < 10:
+                score += 15
+        except:
+            pass
+
+    flagged = score >= 40
+    return score, flagged
+
+
+
+# =====================================
+# ULASv4 — PART 4
+# Attendance Submission Engine
+# =====================================
+
+def normalize_text(text):
+    return str(text).strip().lower()
+
+def add_attendance(name, matric, course, session_id):
+    df = load_records()
+
+    norm_matric = normalize_text(matric)
+
+    # Prevent duplicate matric per session
+    duplicate = df[
+        (df["session_id"] == session_id) &
+        (df["matric"].str.lower() == norm_matric)
+    ]
+
+    if not duplicate.empty:
+        return False, "Matric already recorded for this session."
+
+    record_id = str(uuid.uuid4())
+    timestamp = datetime.datetime.utcnow().isoformat()
+
+    new_entry = {
+        "record_id": record_id,
+        "name": name,
+        "matric": matric,
+        "course": course,
+        "session_id": session_id,
+        "timestamp": timestamp,
+        "browser_id": st.session_state.browser_id,
+        "fingerprint": st.session_state.fingerprint,
+        "risk_score": 0,
+        "flagged": False
+    }
+
+    risk, flagged = calculate_risk_score(df, new_entry)
+    new_entry["risk_score"] = risk
+    new_entry["flagged"] = flagged
+
+    df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
+    save_records(df)
+
+    return True, "Attendance recorded successfully."
+
+
+
+# =====================================
+# ULASv4 — PART 5
+# Safe Edit & Delete Engine
+# =====================================
+
+def delete_record(record_id):
+    df = load_records()
+    df = df[df["record_id"] != record_id]
+    save_records(df)
+
+def edit_record(record_id, name, matric, course):
+    df = load_records()
+
+    df.loc[df["record_id"] == record_id, "name"] = name
+    df.loc[df["record_id"] == record_id, "matric"] = matric
+    df.loc[df["record_id"] == record_id, "course"] = course
+
+    save_records(df)
+
+# =====================================
+# ULASv4 — PART 6
+# Student Attendance Page
+# =====================================
 
 def student_page():
-    sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
-    active = sessions[sessions["status"] == "Active"]
+    st.title("ULASv4 — Student Attendance")
 
-    if active.empty:
-        st.info("No active attendance.")
-        return
-
-    session = active.iloc[-1]
-    sid = session["session_id"]
-
-    if st.session_state.get("sid") != sid:
-        st.title("Enter Attendance Code")
-        code = st.text_input("4-Digit Code")
-
-        if st.button("Continue"):
-            if not code_valid(sid, code):
-                st.error("Invalid or expired code.")
-                return
-            st.session_state.sid = sid
-            st.rerun()
-        return
-
-    st.subheader("Attendance Form")
+    session_id = st.text_input("Session Code")
     name = st.text_input("Full Name")
     matric = st.text_input("Matric Number")
+    course = st.text_input("Course Code")
 
-    if st.button("Submit"):
-        if not re.fullmatch(r"\d{11}", matric):
-            st.error("Invalid matric.")
-            return
-
-        records = load_csv(RECORDS_FILE, RECORD_COLS)
-        srec = records[records["session_id"] == sid]
-
-        if normalize(name) in srec["name"].apply(normalize).values:
-            st.error("Name already used.")
-            return
-        if matric in srec["matric"].values:
-            st.error("Matric already used.")
-            return
-        if device_id() in srec["device_id"].values:
-            st.error("One entry per device.")
-            return
-
-        records.loc[len(records)] = [sid, name, matric, now(), device_id(), DEPARTMENT]
-        save_csv(records, RECORDS_FILE)
-        st.success("Attendance recorded.")
-        st.caption("💙 made with love EPE2025/26. Support:08118429150(Whatsapp)")
-def rep_login():
-    st.title("Course Rep Login")
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
-
-    if st.button("Login"):
-        if sha256_hash(u) == REP_USERNAME_HASH and sha256_hash(p) == REP_PASSWORD_HASH:
-            st.session_state.rep = True
-            st.rerun()
+    if st.button("Submit Attendance"):
+        if not session_id or not name or not matric or not course:
+            st.error("Please fill all fields.")
         else:
-            st.error("Invalid credentials.")
-    st.caption("💙 made with love EPE2025/26. Support:08118429150(Whatsapp)")
-def rep_dashboard():
-    st_autorefresh(interval=1000, key="r")
-    st.title("EPE Course Rep Dashboard")
+            ok, msg = add_attendance(name, matric, course, session_id)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
-    sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
-    records = load_csv(RECORDS_FILE, RECORD_COLS)
 
-    if not sessions[sessions["status"] == "Active"].empty:
-        st.warning("⚠️ Attendance is ACTIVE. End it before starting a new one.")
+# =====================================
+# ULASv4 — PART 7
+# Admin Dashboard
+# =====================================
 
-    att = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
-    course = st.text_input("Course Code") if att == "Per Subject" else ""
+def admin_dashboard():
+    st.title("ULASv4 — Attendance Dashboard")
 
-    if st.button("Start Attendance") and sessions[sessions["status"] == "Active"].empty:
-        sid = str(time.time())
-        sessions.loc[len(sessions)] = [sid, att, session_title(att, course), "Active", now(), DEPARTMENT]
-        save_csv(sessions, SESSIONS_FILE)
-        write_new_code(sid)
-        save_csv(pd.DataFrame(columns=RECORD_COLS), RECORDS_FILE)
-        st.rerun()
+    df = load_records()
 
-    if sessions.empty:
+    if df.empty:
+        st.info("No attendance records yet.")
         return
 
-    sid = st.selectbox("Select Session", sessions["session_id"],
-        format_func=lambda x: sessions[sessions["session_id"] == x]["title"].iloc[0])
+    st.subheader("📋 All Attendance Records")
+    st.dataframe(df, use_container_width=True)
 
-    sess = sessions[sessions["session_id"] == sid].iloc[0]
-    data = records[records["session_id"] == sid]
+    flagged_df = df[df["flagged"] == True]
 
-    st.write(f"Status: {sess['status']}")
+    if not flagged_df.empty:
+        st.subheader("⚠️ Suspicious Entries")
+        st.dataframe(flagged_df, use_container_width=True)
 
-    if sess["status"] == "Active":
-        code, rem = rep_live_code(sid)
-        st.markdown(f"## Live Code: `{code}`")
-        st.caption(f"Refresh in {rem}s")
+    st.subheader("🗑 Delete Record")
+    del_id = st.text_input("Record ID to Delete")
+    if st.button("Delete"):
+        delete_record(del_id)
+        st.success("Deleted. Refresh page.")
 
-        if st.button("🛑 END ATTENDANCE"):
-            sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
-            save_csv(sessions, SESSIONS_FILE)
-            st.rerun()
+    st.subheader("✏️ Edit Record")
+    edit_id = st.text_input("Record ID to Edit")
+    new_name = st.text_input("New Name")
+    new_matric = st.text_input("New Matric")
+    new_course = st.text_input("New Course")
 
-    st.divider()
-    st.subheader("➕ Manual Entry")
+    if st.button("Update Record"):
+        edit_record(edit_id, new_name, new_matric, new_course)
+        st.success("Updated. Refresh page.")
 
-    mn = st.text_input("Name (Manual)")
-    mm = st.text_input("Matric (Manual)")
-
-    if st.button("Add Manually"):
-        if not re.fullmatch(r"\d{11}", mm):
-            st.error("Invalid matric.")
-        else:
-            records.loc[len(records)] = [sid, mn, mm, now(), "MANUAL", DEPARTMENT]
-            save_csv(records, RECORDS_FILE)
-            st.rerun()
-
-    st.divider()
-    st.subheader("Attendance Records")
-
-    view = data.reset_index(drop=True)
-    view.insert(0, "S/N", range(1, len(view) + 1))
-    st.dataframe(view, use_container_width=True)
-
-    if not view.empty:
-        sn = st.number_input("Select S/N", 1, len(view), 1)
-        row = view.iloc[sn - 1]
-
-        en = st.text_input("Edit Name", row["name"])
-        em = st.text_input("Edit Matric", row["matric"])
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-            if st.button("✏️ Update"):
-                records.loc[
-                    (records["session_id"] == sid) & (records["matric"] == row["matric"]),
-                    ["name", "matric"]
-                ] = [en, em]
-                save_csv(records, RECORDS_FILE)
-                st.rerun()
-
-        with c2:
-            if st.button("🗑️ Delete"):
-                records = records.drop(
-                    records[
-                        (records["session_id"] == sid) &
-                        (records["matric"] == row["matric"])
-                    ].index
-                )
-                save_csv(records, RECORDS_FILE)
-                st.rerun()
-
-    if sess["status"] == "Ended":
-        out = view.copy()
-        csv = out[["S/N", "department", "name", "matric", "time"]].to_csv(index=False).encode()
-        st.download_button("📥 Download CSV", csv, file_name=f"{sess['title']}.csv")
-    st.caption("💙 made with love EPE2025/26. Support:08118429150(Whatsapp)")
+# =====================================
+# ULASv4 — PART 8
+# Main App Router
+# =====================================
 
 def main():
-    if "rep" not in st.session_state:
-        st.session_state.rep = False
+    st.sidebar.title("ULASv4 Navigation")
 
-    page = st.sidebar.selectbox("Page", ["Student", "Course Rep"])
-    student_page() if page == "Student" else (rep_dashboard() if st.session_state.rep else rep_login())
+    page = st.sidebar.radio(
+        "Select Mode",
+        ["Student Attendance", "Admin Dashboard"]
+    )
+
+    if page == "Student Attendance":
+        student_page()
+
+    elif page == "Admin Dashboard":
+        admin_dashboard()
+
+# =====================================
+# ENTRY POINT
+# =====================================
 
 if __name__ == "__main__":
     main()
