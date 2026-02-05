@@ -23,6 +23,7 @@ CODES_FILE = "codes.csv"
 SESSION_COLS = ["session_id", "type", "title", "status", "created_at", "department"]
 RECORD_COLS = ["session_id", "name", "matric", "time", "device_id", "department"]
 CODE_COLS = ["session_id", "code", "created_at"]
+
 def load_csv(file, cols):
     return pd.read_csv(file, dtype=str) if os.path.exists(file) else pd.DataFrame(columns=cols)
 
@@ -32,7 +33,6 @@ def save_csv(df, file):
 def normalize(txt):
     return re.sub(r"\s+", " ", str(txt).strip()).lower()
 
-# ===== SINGLE SOURCE OF TIME (UTC+1) =====
 def now():
     return datetime.now(WAT).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -89,84 +89,6 @@ def rep_live_code(session_id):
 
     return latest["code"], int(TOKEN_LIFETIME - age)
 
-def student_page():
-    sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
-    active = sessions[sessions["status"] == "Active"]
-
-    if active.empty:
-        st.info("No active attendance.")
-        return
-
-    session = active.iloc[-1]
-    sid = session["session_id"]
-
-    if "active_session" not in st.session_state:
-        st.session_state.active_session = None
-
-    if st.session_state.active_session != sid:
-        st.title("Enter Attendance Code")
-        code = st.text_input("4-Digit Live Code")
-
-        if st.button("Continue"):
-            if not code_valid(sid, code):
-                st.error("Invalid or expired code.")
-                return
-            st.session_state.active_session = sid
-            st.rerun()
-        return
-
-    st.markdown("### 📘 Attendance Details")
-    st.write(f"**Department:** {session['department']}")
-    st.write(f"**Course / Title:** {session['title']}")
-    st.write(f"**Date:** {session['created_at'].split(' ')[0]}")
-    st.divider()
-
-    st.caption("📌 Naming format: Surname Firstname Middlename")
-    name = st.text_input("Full Name")
-    matric = st.text_input("Matric Number (11 digits)")
-
-    if st.button("Submit Attendance"):
-        if not re.fullmatch(r"\d{11}", str(matric).strip()):
-            st.error("Invalid matric number.")
-            return
-
-        matric = str(matric).strip()
-        records = load_csv(RECORDS_FILE, RECORD_COLS)
-        session_records = records[records["session_id"] == sid]
-
-        if normalize(name) in session_records["name"].apply(normalize).values:
-            st.error("Name already exists for this attendance.")
-            return
-
-        if matric in session_records["matric"].values:
-            st.error("Matric already used for this attendance.")
-            return
-
-        if device_id() in session_records["device_id"].values:
-            st.error("One entry per device.")
-            return
-
-        records.loc[len(records)] = [sid, name, matric, now(), device_id(), DEPARTMENT]
-        save_csv(records, RECORDS_FILE)
-        st.success("Attendance recorded.")
-
-    st.divider()
-    st.caption("💙 made with love EPE2025/26")
-
-
-def rep_login():
-    st.title("Course Rep Login")
-
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
-
-    if st.button("Login"):
-        if sha256_hash(u) == REP_USERNAME_HASH and sha256_hash(p) == REP_PASSWORD_HASH:
-            st.session_state.rep = True
-            st.success("Login successful.")
-            st.rerun()
-        else:
-            st.error("Invalid login credentials.")
 
 def rep_dashboard():
     st_autorefresh(interval=1000, key="refresh")
@@ -194,7 +116,6 @@ def rep_dashboard():
                 sid, att_type, title, "Active", now(), DEPARTMENT
             ]
             save_csv(sessions, SESSIONS_FILE)
-
             write_new_code(sid)
             st.success("Attendance started — records cleared.")
             st.rerun()
@@ -227,6 +148,24 @@ def rep_dashboard():
             save_csv(sessions, SESSIONS_FILE)
             st.success("Attendance ended.")
             st.rerun()
+
+    if session["status"] == "Ended":
+        export = data.copy()
+        export.insert(0, "S/N", range(1, len(export) + 1))
+        csv = export[["S/N", "department", "name", "matric", "time"]].to_csv(index=False).encode()
+
+        st.download_button(
+            "📥 Download Attendance CSV",
+            data=csv,
+            file_name=f"{DEPARTMENT}_{session['title']}.csv",
+            mime="text/csv"
+        )
+
+    st.subheader("Attendance Records")
+    view = data.copy()
+    view.insert(0, "S/N", range(1, len(view) + 1))
+    st.dataframe(view, use_container_width=True)
+
 def main():
     if "rep" not in st.session_state:
         st.session_state.rep = False
@@ -237,6 +176,7 @@ def main():
         student_page()
     else:
         rep_login() if not st.session_state.rep else rep_dashboard()
+
 
 if __name__ == "__main__":
     main()
