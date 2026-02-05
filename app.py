@@ -75,7 +75,7 @@ def code_valid(session_id, entered_code):
     latest = get_latest_code(session_id)
     if latest is None:
         return False
-    age = (datetime.now(WAT) - latest["created_at"]).total_seconds()
+    age = (datetime.now(WAT).replace(tzinfo=None) - latest["created_at"]).total_seconds()
     return str(entered_code).zfill(4) == str(latest["code"]).zfill(4) and age <= TOKEN_LIFETIME
 
 def rep_live_code(session_id):
@@ -83,7 +83,7 @@ def rep_live_code(session_id):
     if latest is None:
         return write_new_code(session_id), TOKEN_LIFETIME
 
-    age = (datetime.now(WAT) - latest["created_at"]).total_seconds()
+    age = (datetime.now(WAT).replace(tzinfo=None) - latest["created_at"]).total_seconds()
     if age >= TOKEN_LIFETIME:
         return write_new_code(session_id), TOKEN_LIFETIME
 
