@@ -166,6 +166,9 @@ def rep_login():
         else:
             st.error("Invalid login credentials.")
 
+def save_records(df):
+    df.to_csv(RECORDS_FILE, index=False)
+
 def rep_dashboard():
     st_autorefresh(interval=1000, key="refresh")
     st.title(f"{DEPARTMENT} Course Rep Dashboard")
@@ -234,9 +237,56 @@ def rep_dashboard():
         )
 
     st.subheader("Attendance Records")
-    view = data.copy()
-    view.insert(0, "S/N", range(1, len(view) + 1))
-    st.dataframe(view, use_container_width=True)
+    view = data.copy().reset_index(drop=True)
+view.insert(0, "S/N", range(1, len(view) + 1))
+
+st.dataframe(view, use_container_width=True)
+
+st.divider()
+st.subheader("🛠️ Manage Entries")
+
+if view.empty:
+    st.info("No records yet.")
+else:
+    row_no = st.number_input(
+        "Select entry (S/N)",
+        min_value=1,
+        max_value=len(view),
+        step=1
+    )
+
+    idx = row_no - 1
+    record = view.iloc[idx]
+
+    name = st.text_input("Full Name", record["name"])
+    matric = st.text_input("Matric Number", record["matric"])
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("✏️ Update Entry"):
+            records.loc[
+                (records["session_id"] == sid) &
+                (records["matric"] == record["matric"]),
+                ["name", "matric"]
+            ] = [name, matric]
+
+            save_records(records)
+            st.success("Entry updated.")
+            st.rerun()
+
+    with col2:
+        if st.button("🗑️ Delete Entry"):
+            records = records.drop(
+                records[
+                    (records["session_id"] == sid) &
+                    (records["matric"] == record["matric"])
+                ].index
+            )
+
+            save_records(records)
+            st.warning("Entry deleted.")
+            st.rerun()
 def main():
     if "rep" not in st.session_state:
         st.session_state.rep = False
