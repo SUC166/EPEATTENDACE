@@ -129,7 +129,7 @@ def student_page():
         records.loc[len(records)] = [sid, name, matric, now(), device_id(), DEPARTMENT]
         save_csv(records, RECORDS_FILE)
         st.success("Attendance recorded.")
-
+        st.caption("💙 made with love EPE2025/26. Support:08118429150(Whatsapp)")
 def rep_login():
     st.title("Course Rep Login")
     u = st.text_input("Username")
@@ -141,7 +141,7 @@ def rep_login():
             st.rerun()
         else:
             st.error("Invalid credentials.")
-
+    st.caption("💙 made with love EPE2025/26. Support:08118429150(Whatsapp)")
 def rep_dashboard():
     st_autorefresh(interval=1000, key="r")
     st.title("EPE Course Rep Dashboard")
@@ -238,7 +238,7 @@ def rep_dashboard():
         out = view.copy()
         csv = out[["S/N", "department", "name", "matric", "time"]].to_csv(index=False).encode()
         st.download_button("📥 Download CSV", csv, file_name=f"{sess['title']}.csv")
-
+    st.caption("💙 made with love EPE2025/26. Support:08118429150(Whatsapp)")
 
 def main():
     if "rep" not in st.session_state:
