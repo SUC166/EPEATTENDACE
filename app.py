@@ -168,86 +168,97 @@ def rep_login():
 
 def save_records(df):
     df.to_csv(RECORDS_FILE, index=False)
-
 def rep_dashboard():
-    st_autorefresh(interval=1000, key="refresh")
-    st.title(f"{DEPARTMENT} Course Rep Dashboard")
+    st.title("EPE Course Rep Dashboard")
 
-    sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
-    records = load_csv(RECORDS_FILE, RECORD_COLS)
+    sessions = load_sessions()
+    records = load_records()
 
-    active_sessions = sessions[sessions["status"] == "Active"]
-    if not active_sessions.empty:
-        st.warning("⚠️ Attendance is ACTIVE. End it before starting a new one.")
+    active = sessions[sessions["status"] == "Active"]
 
-    att_type = st.selectbox("Attendance Type", ["Daily", "Per Subject"])
-    course = st.text_input("Course Code") if att_type == "Per Subject" else ""
-
-    if st.button("Start Attendance"):
-        if active_sessions.empty:
-            save_csv(pd.DataFrame(columns=RECORD_COLS), RECORDS_FILE)
-            sid = str(time.time())
-            title = session_title(att_type, course)
-            sessions.loc[len(sessions)] = [sid, att_type, title, "Active", now(), DEPARTMENT]
-            save_csv(sessions, SESSIONS_FILE)
-            write_new_code(sid)
-            st.success("Attendance started.")
-            st.rerun()
-        else:
-            st.error("End current attendance first.")
-
-    sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
-    if sessions.empty:
+    if active.empty:
+        st.warning("No active attendance.")
         return
 
-    sid = st.selectbox(
-        "Select Session",
-        sessions["session_id"],
-        format_func=lambda x: sessions[sessions["session_id"] == x]["title"].iloc[0]
-    )
+    sid = active.iloc[0]["session_id"]
+    session = active.iloc[0]
 
-    session = sessions[sessions["session_id"] == sid].iloc[0]
+    st.success(f"Session: {session['title']}")
+    st.write(f"Department: {session['department']}")
+    st.write("Status: Active")
+
+    st.divider()
+
+    # Live Code Display
+    code, remaining = rep_live_code(sid)
+
+    if code:
+        st.metric("Live Attendance Code", code)
+        st.caption(f"Expires in {remaining}s")
+
+    st.divider()
+
+    # Filter session records
     data = records[records["session_id"] == sid]
 
-    st.subheader(f"Session: {session['title']}")
-    st.write(f"Department: {session['department']}")
-    st.write(f"Status: {session['status']}")
+    # MANUAL ENTRY SECTION
+    st.subheader("➕ Add Entry Manually")
 
-    if session["status"] == "Active":
-        code, remaining = rep_live_code(sid)
-        st.markdown(f"## Live Code: `{code}`")
-        st.caption(f"Changes in {remaining} seconds")
+    m_name = st.text_input("Student Full Name (Manual)")
+    m_matric = st.text_input("Matric Number (Manual)")
 
-        if st.button("🛑 END ATTENDANCE"):
-            sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
-            save_csv(sessions, SESSIONS_FILE)
-            st.success("Attendance ended.")
-            st.rerun()
+    if st.button("Add Manually"):
+        if not re.fullmatch(r"\d{11}", m_matric.strip()):
+            st.error("Invalid matric number.")
+        else:
+            exists = records[
+                (records["session_id"] == sid) &
+                (records["matric"] == m_matric)
+            ]
 
-    if session["status"] == "Ended":
-        export = data.copy()
-        export.insert(0, "S/N", range(1, len(export) + 1))
-        csv = export[["S/N", "department", "name", "matric", "time"]].to_csv(index=False).encode()
+            if not exists.empty:
+                st.error("Entry already exists.")
+            else:
+                records.loc[len(records)] = [
+                    sid,
+                    m_name,
+                    m_matric,
+                    now(),
+                    "MANUAL",
+                    session["department"]
+                ]
+                save_records(records)
+                st.success("Manual entry added.")
+                st.rerun()
 
-        st.download_button(
-            "📥 Download Attendance CSV",
-            data=csv,
-            file_name=f"{DEPARTMENT}_{session['title']}.csv",
-            mime="text/csv"
-        )
+    st.divider()
 
+    # DISPLAY RECORDS
     st.subheader("Attendance Records")
+
+    if data.empty:
+        st.info("No attendance records yet.")
+        return
+
     view = data.copy().reset_index(drop=True)
-view.insert(0, "S/N", range(1, len(view) + 1))
+    view.insert(0, "S/N", range(1, len(view) + 1))
 
-st.dataframe(view, use_container_width=True)
+    st.dataframe(view, use_container_width=True)
 
-st.divider()
-st.subheader("🛠️ Manage Entries")
+    # CSV DOWNLOAD
+    csv = data.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "📥 Download CSV",
+        csv,
+        file_name=f"{session['title']}.csv",
+        mime="text/csv"
+    )
 
-if view.empty:
-    st.info("No records yet.")
-else:
+    st.divider()
+
+    # EDIT / DELETE SECTION
+    st.subheader("🛠️ Manage Entries")
+
     row_no = st.number_input(
         "Select entry (S/N)",
         min_value=1,
@@ -258,8 +269,8 @@ else:
     idx = row_no - 1
     record = view.iloc[idx]
 
-    name = st.text_input("Full Name", record["name"])
-    matric = st.text_input("Matric Number", record["matric"])
+    name = st.text_input("Edit Full Name", record["name"])
+    matric = st.text_input("Edit Matric Number", record["matric"])
 
     col1, col2 = st.columns(2)
 
@@ -287,6 +298,16 @@ else:
             save_records(records)
             st.warning("Entry deleted.")
             st.rerun()
+
+    st.divider()
+
+    # END SESSION BUTTON
+    if st.button("🛑 End Attendance"):
+        sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
+        save_sessions(sessions)
+        st.success("Attendance ended.")
+        st.rerun()
+
 def main():
     if "rep" not in st.session_state:
         st.session_state.rep = False
