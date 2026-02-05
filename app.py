@@ -85,17 +85,21 @@ if fingerprint_data is None:
     }
 
 def generate_fingerprint(data):
-    raw = (
-        str(data.get("userAgent")) +
-        str(data.get("platform")) +
-        str(data.get("language")) +
-        str(data.get("timezone")) +
-        str(data.get("screenWidth")) +
-        str(data.get("screenHeight")) +
-        str(data.get("pixelRatio"))
-    )
-    return hashlib.sha256(raw.encode()).hexdigest()
+    # Ensure data is a dictionary
+    if not isinstance(data, dict):
+        data = {}
 
+    raw = (
+        str(data.get("userAgent", "unknown")) +
+        str(data.get("platform", "unknown")) +
+        str(data.get("language", "unknown")) +
+        str(data.get("timezone", "unknown")) +
+        str(data.get("screenWidth", 0)) +
+        str(data.get("screenHeight", 0)) +
+        str(data.get("pixelRatio", 1))
+    )
+
+    return hashlib.sha256(raw.encode()).hexdigest()
 fingerprint_hash = generate_fingerprint(fingerprint_data)
 
 # =====================================
