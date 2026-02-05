@@ -189,6 +189,17 @@ def load_sessions():
         "created_at"
     ])
 
+def load_records():
+    if not os.path.exists(RECORDS_FILE):
+        return pd.DataFrame(columns=[
+            "session_id",
+            "name",
+            "matric",
+            "time",
+            "source",
+            "department"
+        ])
+    return pd.read_csv(RECORDS_FILE)
 
 def rep_dashboard():
     st.title("EPE Course Rep Dashboard")
